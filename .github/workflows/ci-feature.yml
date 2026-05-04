@@ -30,18 +30,26 @@ jobs:
 
       - name: Create Pull Request to Develop
         run: |
-          # Fetch develop branch to check for existence and commits
-          git fetch origin develop:develop || echo "Develop branch does not exist on remote yet."
+          # Fetch main to ensure it exists locally
+          git fetch origin main:main || true
 
-          if ! git show-ref --verify --quiet refs/heads/develop; then
-            echo "Develop branch does not exist. Cannot create PR."
-            exit 0
+          # Fetch or create develop
+          if git fetch origin develop:develop; then
+            echo "Develop branch fetched from remote."
+          else
+            echo "Develop branch does not exist on remote. Creating it from main..."
+            git checkout main
+            git checkout -b develop
+            git push origin develop
           fi
+
+          # Switch back to the feature branch
+          git checkout ${{ github.ref_name }}
 
           # Check if there are commits between current branch and develop
           COMMITS_COUNT=$(git rev-list --count develop..${{ github.ref_name }})
           if [ "$COMMITS_COUNT" -eq 0 ]; then
-            echo "No new commits to merge into develop."
+            echo "::warning ::No new commits to merge into develop. PR creation skipped."
             exit 0
           fi
 
@@ -49,11 +57,12 @@ jobs:
           PR_EXISTS=$(gh pr list --head "${{ github.ref_name }}" --base develop --json number | jq 'length > 0')
 
           if [ "$PR_EXISTS" = "false" ]; then
+            echo "Creating PR from ${{ github.ref_name }} to develop..."
             gh pr create \
               --title "Merge ${{ github.ref_name }} into develop" \
               --body "Automated PR from feature branch to develop after successful CI." \
               --base develop \
-              --head "${{ github.ref_name }}" || echo "Failed to create PR, it might already exist or have no changes."
+              --head "${{ github.ref_name }}"
           else
             echo "PR already exists for ${{ github.ref_name }} to develop."
           fi

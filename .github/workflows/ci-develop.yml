@@ -76,12 +76,27 @@ jobs:
 
           # Create branch from main
           git checkout main
-          git checkout -b "$RELEASE_BRANCH"
-          git push origin "$RELEASE_BRANCH"
+
+          # Check if branch already exists on remote
+          if git ls-remote --heads origin "$RELEASE_BRANCH" | grep -q "$RELEASE_BRANCH"; then
+            echo "Release branch $RELEASE_BRANCH already exists on remote."
+            git fetch origin "$RELEASE_BRANCH":"$RELEASE_BRANCH"
+            git checkout "$RELEASE_BRANCH"
+          else
+            git checkout -b "$RELEASE_BRANCH"
+            git push origin "$RELEASE_BRANCH"
+          fi
+
+          # Check if there are commits to PR from develop to release
+          COMMITS_COUNT=$(git rev-list --count "$RELEASE_BRANCH"..develop)
+          if [ "$COMMITS_COUNT" -eq 0 ]; then
+            echo "No new commits to merge into $RELEASE_BRANCH."
+            exit 0
+          fi
 
           # Create PR from develop to release branch
           gh pr create \
             --title "Release $NEXT_VERSION" \
             --body "Automated release PR from develop to $RELEASE_BRANCH." \
             --base "$RELEASE_BRANCH" \
-            --head develop
+            --head develop || echo "Failed to create PR, it might already exist or have no changes."

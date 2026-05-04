@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -28,6 +30,16 @@ jobs:
 
       - name: Create Pull Request to Main
         run: |
+          # Fetch main branch
+          git fetch origin main:main
+
+          # Check if there are commits between current branch and main
+          COMMITS_COUNT=$(git rev-list --count main..${{ github.ref_name }})
+          if [ "$COMMITS_COUNT" -eq 0 ]; then
+            echo "No new commits to merge into main."
+            exit 0
+          fi
+
           # Check if PR already exists
           PR_EXISTS=$(gh pr list --head "${{ github.ref_name }}" --base main --json number | jq 'length > 0')
 
@@ -36,7 +48,7 @@ jobs:
               --title "Finalize Release ${{ github.ref_name }}" \
               --body "Automated PR from release branch to main after successful CI." \
               --base main \
-              --head "${{ github.ref_name }}"
+              --head "${{ github.ref_name }}" || echo "Failed to create PR, it might already exist or have no changes."
           else
             echo "PR already exists for ${{ github.ref_name }} to main."
           fi

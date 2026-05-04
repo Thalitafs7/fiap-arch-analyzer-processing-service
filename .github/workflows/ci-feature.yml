@@ -17,6 +17,8 @@ jobs:
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -28,6 +30,21 @@ jobs:
 
       - name: Create Pull Request to Develop
         run: |
+          # Fetch develop branch to check for existence and commits
+          git fetch origin develop:develop || echo "Develop branch does not exist on remote yet."
+
+          if ! git show-ref --verify --quiet refs/heads/develop; then
+            echo "Develop branch does not exist. Cannot create PR."
+            exit 0
+          fi
+
+          # Check if there are commits between current branch and develop
+          COMMITS_COUNT=$(git rev-list --count develop..${{ github.ref_name }})
+          if [ "$COMMITS_COUNT" -eq 0 ]; then
+            echo "No new commits to merge into develop."
+            exit 0
+          fi
+
           # Check if PR already exists
           PR_EXISTS=$(gh pr list --head "${{ github.ref_name }}" --base develop --json number | jq 'length > 0')
 
@@ -36,7 +53,7 @@ jobs:
               --title "Merge ${{ github.ref_name }} into develop" \
               --body "Automated PR from feature branch to develop after successful CI." \
               --base develop \
-              --head "${{ github.ref_name }}"
+              --head "${{ github.ref_name }}" || echo "Failed to create PR, it might already exist or have no changes."
           else
             echo "PR already exists for ${{ github.ref_name }} to develop."
           fi

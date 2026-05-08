@@ -1,0 +1,21 @@
+{
+  "name": "hackathon-iadt-e2e",
+  "version": "1.0.0",
+  "description": "E2E tests for hackathon-iadt architecture diagram analyzer",
+  "scripts": {
+    "test": "npx playwright test",
+    "test:health": "npx playwright test health-check",
+    "test:upload": "npx playwright test upload-flow",
+    "test:sse": "npx playwright test sse-pipeline",
+    "test:report": "npx playwright test report-display",
+    "test:errors": "npx playwright test error-scenarios",
+    "test:api": "npx playwright test report-api",
+    "test:history": "npx playwright test history",
+    "test:ui": "npx playwright test --ui",
+    "report": "npx playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0",
+    "typescript": "^5.7.0"
+  }
+}

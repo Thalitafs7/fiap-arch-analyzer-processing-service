@@ -1,0 +1,33 @@
+# ============================================================
+# Dependências de fine-tuning (GPU only)
+# NÃO incluir no requirements.txt principal — este arquivo é
+# usado apenas para rodar train.py em máquina com GPU.
+#
+# Instalação:
+#   pip install -r finetuning-requirements.txt
+#
+# Recomendado: Google Colab Pro (A100), RunPod, Lambda Labs
+# VRAM mínima: 16GB (para modelo 7B com QLoRA 4-bit)
+# ============================================================
+
+# PyTorch — instale a versão correta para sua CUDA:
+# https://pytorch.org/get-started/locally/
+torch>=2.1.0
+
+# Transformers + PEFT (LoRA/QLoRA)
+transformers>=4.36.0
+peft>=0.7.0
+bitsandbytes>=0.41.0     # quantização 4-bit
+
+# Trainer e datasets
+trl>=0.7.4               # SFTTrainer
+datasets>=2.16.0
+accelerate>=0.25.0
+
+# HuggingFace Hub (push do adapter treinado)
+huggingface_hub>=0.26.5
+
+# Utilitários
+scipy>=1.11.0
+sentencepiece>=0.1.99    # tokenizer de alguns modelos (Mistral, LLaMA)
+protobuf>=3.20.0

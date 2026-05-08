@@ -1,0 +1,118 @@
+version: "3.9"
+
+# Compose standalone do ia-service.
+# Sobe: pgvector (DB) + redis + celery-worker + ia-service.
+# Uso: cd ia-service && docker compose up
+
+services:
+
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: ia_pgvector
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-hackathon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hackathon123}
+      POSTGRES_DB: ${POSTGRES_DB:-hackathon_db}
+    ports:
+      - "5432:5432"
+    volumes:
+      - ia_pgvector_data:/var/lib/postgresql/data
+      - ./infrastructure/database/init:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-hackathon} -d ${POSTGRES_DB:-hackathon_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: ia_redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ia-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ia_service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      POSTGRES_USER: ${POSTGRES_USER:-hackathon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hackathon123}
+      POSTGRES_DB: ${POSTGRES_DB:-hackathon_db}
+      POSTGRES_HOST: pgvector
+      POSTGRES_PORT: 5432
+      POSTGRES_CONNECTION_STRING: postgresql+psycopg://${POSTGRES_USER:-hackathon}:${POSTGRES_PASSWORD:-hackathon123}@pgvector:5432/${POSTGRES_DB:-hackathon_db}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      REPORT_MODEL_BACKEND: ${REPORT_MODEL_BACKEND:-langchain}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_VISION_MODEL: ${LLM_VISION_MODEL:-}
+      HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN:-}
+      HUGGINGFACE_ENDPOINT_URL: ${HUGGINGFACE_ENDPOINT_URL:-}
+      LOCAL_MODEL_PATH: ${LOCAL_MODEL_PATH:-}
+      BASE_MODEL_ID: ${BASE_MODEL_ID:-}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      pgvector:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  celery-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ia_celery_worker
+    restart: unless-stopped
+    command: celery -A app.infrastructure.celery.celery_app worker --loglevel=info --concurrency=2
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      POSTGRES_USER: ${POSTGRES_USER:-hackathon}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-hackathon123}
+      POSTGRES_DB: ${POSTGRES_DB:-hackathon_db}
+      POSTGRES_HOST: pgvector
+      POSTGRES_PORT: 5432
+      POSTGRES_CONNECTION_STRING: postgresql+psycopg://${POSTGRES_USER:-hackathon}:${POSTGRES_PASSWORD:-hackathon123}@pgvector:5432/${POSTGRES_DB:-hackathon_db}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+      AWS_REGION: ${AWS_REGION:-us-east-1}
+      SQS_QUEUE_URL: ${SQS_QUEUE_URL:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      REPORT_MODEL_BACKEND: ${REPORT_MODEL_BACKEND:-langchain}
+      LLM_MODEL: ${LLM_MODEL:-gpt-4o}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_VISION_MODEL: ${LLM_VISION_MODEL:-}
+      HUGGINGFACE_API_TOKEN: ${HUGGINGFACE_API_TOKEN:-}
+      HUGGINGFACE_ENDPOINT_URL: ${HUGGINGFACE_ENDPOINT_URL:-}
+      LOCAL_MODEL_PATH: ${LOCAL_MODEL_PATH:-}
+      BASE_MODEL_ID: ${BASE_MODEL_ID:-}
+      REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+      pgvector:
+        condition: service_healthy
+
+volumes:
+  ia_pgvector_data:
+    driver: local

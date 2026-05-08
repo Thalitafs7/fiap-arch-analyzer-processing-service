@@ -1,0 +1,87 @@
+name: CI Develop Branch
+
+on:
+  push:
+    branches:
+      - develop
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  test-and-release-pr:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.5.0"
+
+      - name: Run Tests
+        run: ./.github/scripts/check_test_success.sh
+
+      - name: Calculate Next Version
+        id: semver
+        run: |
+          # Fetch tags and main branch
+          git fetch origin main:main --tags
+
+          # Get the current version from the latest tag on main
+          # If no tag exists, start with v0.0.0
+          LATEST_TAG=$(git tag --merged main | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -V | tail -n1)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="v0.0.0"
+          fi
+          echo "Latest tag: $LATEST_TAG"
+
+          # Remove 'v' prefix
+          VERSION=${LATEST_TAG#v}
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$VERSION"
+
+          # Get the last commit message from develop
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "Commit message: $COMMIT_MSG"
+
+          if echo "$COMMIT_MSG" | grep -Eq "BREAKING CHANGE|!|feat\!:|fix\!:|chore\!:|docs\!:|style\!:|refactor\!:|perf\!:|test\!:|build\!:|ci\!:|revert\!:"; then
+            MAJOR=$((MAJOR + 1))
+            MINOR=0
+            PATCH=0
+          elif echo "$COMMIT_MSG" | grep -q "^feat:"; then
+            MINOR=$((MINOR + 1))
+            PATCH=0
+          else
+            PATCH=$((PATCH + 1))
+          fi
+
+          NEXT_VERSION="v$MAJOR.$MINOR.$PATCH"
+          echo "Next version: $NEXT_VERSION"
+          echo "version=$NEXT_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create Release Branch and PR
+        run: |
+          NEXT_VERSION=${{ steps.semver.outputs.version }}
+          RELEASE_BRANCH="release/${NEXT_VERSION#v}"
+
+          # Configure Git
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Create branch from main
+          git checkout main
+          git checkout -b "$RELEASE_BRANCH"
+          git push origin "$RELEASE_BRANCH"
+
+          # Create PR from develop to release branch
+          gh pr create \
+            --title "Release $NEXT_VERSION" \
+            --body "Automated release PR from develop to $RELEASE_BRANCH." \
+            --base "$RELEASE_BRANCH" \
+            --head develop

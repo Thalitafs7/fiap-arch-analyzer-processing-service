@@ -1,0 +1,1140 @@
+================================================================================
+ DOCUMENTACAO TECNICA - WORKFLOW DO SISTEMA
+ Hackathon FIAP - Time IADT
+ Analise Automatizada de Diagramas de Arquitetura com IA
+================================================================================
+
+Versao.........: 1.0
+Data...........: 2026-04-16
+Servicos.......: ia-service (8000), report-api (8001), streamlit-app (8501),
+                 celery-worker, redis (6379), pgvector (5432)
+Stack..........: Python, FastAPI, Celery, Redis, PostgreSQL + pgvector,
+                 LangChain, OpenAI gpt-4o, Streamlit, Docker Compose
+Padroes........: DDD (modelagem tatica) + Arquitetura Hexagonal (Ports & Adapters)
+
+================================================================================
+ SUMARIO
+================================================================================
+
+  1. VISAO GERAL DO SISTEMA ...................................... [cap. 1]
+     1.1  O que o sistema faz
+     1.2  Quem sao os atores
+     1.3  Mapa de componentes
+     1.4  Fluxos de entrada (3 caminhos)
+
+  2. WORKFLOW PRINCIPAL - VISAO DE ALTO NIVEL .................... [cap. 2]
+     2.1  Diagrama resumido do fluxo ponta-a-ponta
+     2.2  Estados de uma analise
+
+  3. WORKFLOW DETALHADO - CAMINHO A (UPLOAD VIA STREAMLIT) ....... [cap. 3]
+     3.1  Passo 1 - Usuario faz upload do diagrama
+     3.2  Passo 2 - Streamlit envia POST /analyze/async
+     3.3  Passo 3 - ia-service cria job e dispara task Celery
+     3.4  Passo 4 - Streamlit abre stream SSE
+     3.5  Passo 5 - Celery Worker consome a task
+     3.6  Passo 6 - Worker executa pipeline e publica eventos
+     3.7  Passo 7 - Streamlit consome eventos e renderiza
+
+  4. WORKFLOW DETALHADO - CAMINHO B (AWS SQS + S3 + WEBHOOK) ..... [cap. 4]
+     4.1  Passo 1 - SOAT publica mensagem no SQS
+     4.2  Passo 2 - Consumer thread recebe mensagem
+     4.3  Passo 3 - Validacoes de idempotencia e poison pill
+     4.4  Passo 4 - Download do S3
+     4.5  Passo 5 - Execucao do pipeline
+     4.6  Passo 6 - Devolutiva via webhook
+     4.7  Passo 7 - Delete da mensagem no SQS
+
+  5. PIPELINE DE IA - AS 5 ETAPAS + GUARDRAILS ................... [cap. 5]
+     5.1  Etapa 0 - Input Guardrails
+     5.2  Etapa 1 - Ingestion
+     5.3  Etapa 2 - Classification (Vision LLM)
+     5.4  Etapa 3 - Extraction (Vision LLM)
+     5.5  Etapa 3.5 - Guardrail de Extracao
+     5.6  Etapa 4 - RAG (pgvector)
+     5.7  Etapa 5 - Report + Riscos (Text LLM)
+     5.8  Etapa 5.5 - Output Guardrails
+     5.9  Etapa 6 - QA (2 fases + loop de refinamento)
+     5.10 Etapa 7 - Persistencia + Webhook
+
+  6. CONVERGENCIA E TRATAMENTO DE FALHAS ......................... [cap. 6]
+     6.1  Ground Truth (ExtractionResult como ancora)
+     6.2  Estrategias de bloqueio x non-blocking
+     6.3  Tratamento de falhas por etapa
+     6.4  Loop de refinamento do QA
+
+  7. PERSISTENCIA E OBSERVABILIDADE .............................. [cap. 7]
+     7.1  Tabelas do PostgreSQL
+     7.2  Redis (broker + pub/sub + event store)
+     7.3  Logs estruturados (structlog)
+     7.4  Domain Events emitidos
+
+  8. WORKFLOW DE CONSULTA DE RELATORIO ........................... [cap. 8]
+     8.1  GET /reports (lista)
+     8.2  GET /reports/{id} (detalhe)
+     8.3  GET /analyses/{id}/status (acompanhamento)
+
+  9. RESUMO VISUAL DO WORKFLOW ................................... [cap. 9]
+ 10. GLOSSARIO .................................................. [cap. 10]
+
+
+================================================================================
+ 1. VISAO GERAL DO SISTEMA                                         [cap. 1]
+================================================================================
+
+--------------------------------------------------------------------------------
+ 1.1  O que o sistema faz
+--------------------------------------------------------------------------------
+
+O sistema automatiza a analise de diagramas de arquitetura de software. Recebe
+uma imagem (PNG, JPG, JPEG, GIF, WEBP) ou PDF e devolve um relatorio tecnico
+estruturado contendo:
+
+  - Componentes identificados no diagrama
+  - Relacionamentos entre componentes
+  - Padroes arquiteturais reconhecidos
+  - Riscos classificados em 6 categorias (SPOF, Seguranca, Escalabilidade,
+    Acoplamento, Observabilidade, Resiliencia) com severidade (ALTO/MEDIO/BAIXO)
+  - Recomendacoes de melhoria (marcadas com [RAG] quando vindas do historico)
+  - Sumario executivo
+  - Score de QA (0 a 1) validando o proprio relatorio
+
+--------------------------------------------------------------------------------
+ 1.2  Quem sao os atores
+--------------------------------------------------------------------------------
+
+  Usuario final          - faz upload do diagrama pelo Streamlit
+  Time SOAT              - publica mensagens no SQS com URL do S3
+  ia-service             - orquestrador do pipeline
+  Celery Worker          - executa o pipeline em background
+  Redis                  - broker do Celery + pub/sub de eventos SSE
+  PostgreSQL + pgvector  - persiste analises, relatorios e embeddings
+  OpenAI API (gpt-4o)    - LLM Vision (extracao) + LLM Text (relatorio + QA)
+  report-api             - API read-only para consulta de relatorios
+
+--------------------------------------------------------------------------------
+ 1.3  Mapa de componentes
+--------------------------------------------------------------------------------
+
+  +------------------+     +------------------+     +------------------+
+  | streamlit-app    | --> | ia-service       | --> | celery-worker    |
+  | :8501 (UI)       |     | :8000 (FastAPI)  |     | (pipeline IA)    |
+  +------------------+     +------------------+     +------------------+
+                                   |                        |
+                                   v                        v
+                            +------------------+     +------------------+
+                            | report-api       |     | redis :6379      |
+                            | :8001 (read)     |     | broker + pubsub  |
+                            +------------------+     +------------------+
+                                   |                        |
+                                   v                        v
+                            +------------------------------------------+
+                            | pgvector :5432                           |
+                            | analyses, extraction_results, reports,   |
+                            | langchain_pg_embedding (HNSW cosine)     |
+                            +------------------------------------------+
+
+--------------------------------------------------------------------------------
+ 1.4  Fluxos de entrada (3 caminhos, mesmo pipeline)
+--------------------------------------------------------------------------------
+
+  Caminho A - Upload via Streamlit (fluxo principal)
+     Streamlit --> POST /analyze/async --> Celery --> pipeline --> SSE
+
+  Caminho B - AWS SQS (integracao SOAT)
+     SOAT --> SQS --> Consumer Thread --> S3 download --> pipeline --> Webhook
+
+  Caminho C - API direta (testes)
+     cliente --> POST /analyze (sincrono) --> pipeline --> JSON response
+
+Todos os caminhos convergem para o mesmo use case:
+   application/use_cases/analyze_diagram.py :: AnalyzeDiagramUseCase.execute()
+
+
+================================================================================
+ 2. WORKFLOW PRINCIPAL - VISAO DE ALTO NIVEL                       [cap. 2]
+================================================================================
+
+--------------------------------------------------------------------------------
+ 2.1  Diagrama resumido do fluxo ponta-a-ponta
+--------------------------------------------------------------------------------
+
+  [Upload do diagrama]
+        |
+        v
+  [Recepcao do arquivo]  ---> cria registro em 'analyses' (status: recebido)
+        |
+        v
+  [Enfileiramento async] ---> Celery task + job_id para SSE
+        |
+        v
+  +-----------------------------------------------------------------+
+  | PIPELINE DE IA (executado pelo Celery Worker)                   |
+  |                                                                 |
+  |  0. Input Guardrails                                            |
+  |  1. Ingestion (validacao + base64)                              |
+  |  2. Classification (Vision LLM: e diagrama?)                    |
+  |  3. Extraction (Vision LLM: componentes, relacoes, padroes)     |
+  |  3.5 Guardrail de Extracao (schema + injection)                 |
+  |  4. RAG (busca similares no pgvector - non-blocking)            |
+  |  5. Report + Riscos (Text LLM com contexto RAG)                 |
+  |  5.5 Output Guardrails (schema + PII + conteudo proibido)       |
+  |  6. QA (determinisitico + LLM, loop de refinamento max 2x)      |
+  |  7. Persistencia + Webhook                                      |
+  +-----------------------------------------------------------------+
+        |
+        v
+  [Resultado entregue]
+    - Banco: analyses (status: analisado|erro), reports, extraction_results
+    - Redis: evento final publicado no canal job:{id}
+    - SSE: Streamlit recebe e renderiza o relatorio
+    - Webhook: POST callback_url (apenas caminho SQS)
+
+--------------------------------------------------------------------------------
+ 2.2  Estados de uma analise
+--------------------------------------------------------------------------------
+
+  recebido         -> analise criada, aguardando processamento
+       |
+       v
+  em_processamento -> pipeline em execucao
+       |
+       +-----> analisado (sucesso: relatorio gerado e aprovado no QA)
+       |
+       +-----> erro (falha em alguma etapa bloqueante)
+
+Maquina de estados protegida pelo AnalysisAggregate:
+   - Apenas 'recebido' pode transitar para 'em_processamento'
+   - Qualquer estado pode transitar para 'erro'
+   - Emissao de Domain Events a cada transicao
+
+
+================================================================================
+ 3. WORKFLOW DETALHADO - CAMINHO A (UPLOAD VIA STREAMLIT)          [cap. 3]
+================================================================================
+
+Este e o fluxo principal do hackathon. Todas as etapas sao numeradas em ordem
+temporal. Use este capitulo como referencia para debugar e rastrear.
+
+--------------------------------------------------------------------------------
+ 3.1  Passo 1 - Usuario faz upload do diagrama
+--------------------------------------------------------------------------------
+
+Onde: Interface Streamlit em http://localhost:8501
+
+Acao do usuario:
+  - Arrasta o arquivo para a area de upload (drag & drop) ou usa file picker
+  - O Streamlit mostra um preview (se for imagem)
+  - O usuario clica em "Analisar Diagrama"
+
+O que o Streamlit faz:
+  - Le os bytes do arquivo (file.read())
+  - Monta um multipart/form-data com campo 'file'
+  - Inicia a requisicao POST /analyze/async
+
+--------------------------------------------------------------------------------
+ 3.2  Passo 2 - Streamlit envia POST /analyze/async
+--------------------------------------------------------------------------------
+
+Endpoint HTTP: POST http://ia-service:8000/analyze/async
+Body.........: multipart/form-data com o arquivo
+Tipo.........: Assincrono (nao bloqueia aguardando o pipeline)
+
+O ia-service responde em <100ms com:
+  HTTP 202 Accepted
+  {
+    "job_id": "<uuid>",
+    "status": "queued"
+  }
+
+Neste momento:
+  - O arquivo ja esta carregado na memoria do ia-service
+  - A analise ainda nao foi criada no banco (so apos ingestion no worker)
+  - Apenas o job_id foi alocado para tracking via Redis
+
+--------------------------------------------------------------------------------
+ 3.3  Passo 3 - ia-service cria job e dispara task Celery
+--------------------------------------------------------------------------------
+
+No ia-service (modulo infrastructure/celery/tasks.py):
+
+  1. Gera job_id (UUID)
+  2. Chama analyze_diagram_task.delay(file_hex, file_name, job_id)
+     - file_hex  = bytes serializados em hex (para travessia segura via broker)
+     - file_name = nome original do arquivo
+     - job_id    = identificador do canal Redis para SSE
+  3. O Celery empacota a task e publica no Redis (broker Celery)
+  4. O ia-service retorna 202 com o job_id
+
+Por que o arquivo e serializado como hex?
+  O broker Celery (Redis) aceita apenas strings JSON-serializaveis. Bytes
+  crus nao funcionam. Hex preserva a integridade binaria com overhead de 2x.
+
+--------------------------------------------------------------------------------
+ 3.4  Passo 4 - Streamlit abre stream SSE
+--------------------------------------------------------------------------------
+
+Imediatamente apos receber o job_id, o Streamlit abre um stream:
+
+  GET /jobs/{job_id}/events
+  Accept: text/event-stream
+
+Do lado do ia-service:
+  - O endpoint faz SUBSCRIBE no canal Redis: job:{job_id}
+  - Cada mensagem publicada no canal e emitida como evento SSE
+  - O formato dos eventos segue o padrao:
+       data: {"step":"<nome>","status":"running|done|error","data":{...}}
+
+Enquanto o pipeline nao inicia ou nao emite eventos, o stream permanece
+aberto sem dados. O Streamlit exibe "aguardando worker...".
+
+--------------------------------------------------------------------------------
+ 3.5  Passo 5 - Celery Worker consome a task
+--------------------------------------------------------------------------------
+
+Container: hackathon_celery_worker (concurrency=2)
+
+  1. O Worker faz polling no Redis (broker)
+  2. Pega a task analyze_diagram_task com os argumentos
+  3. Decodifica file_hex -> bytes
+  4. Constroi o DB session e monta o AnalyzeDiagramUseCase via Composition Root
+  5. Inicia o pipeline chamando use_case.execute(...)
+
+Antes de qualquer etapa, o worker publica o primeiro evento:
+  publish(job:{id}, {"step": "pipeline", "status": "running"})
+
+--------------------------------------------------------------------------------
+ 3.6  Passo 6 - Worker executa pipeline e publica eventos
+--------------------------------------------------------------------------------
+
+Para cada uma das 8 etapas principais, o worker:
+
+  1. Publica evento "running" antes de iniciar
+  2. Executa a logica da etapa (ver capitulo 5 para detalhes)
+  3. Persiste o resultado no banco quando aplicavel
+  4. Publica evento "done" com metricas (tempo, contadores)
+
+Em caso de erro bloqueante em uma etapa:
+  - Publica evento "error" com detalhes
+  - Atualiza analysis.status = 'erro' + error_message
+  - Encerra o pipeline
+
+Detalhamento completo das etapas: ver capitulo 5.
+
+--------------------------------------------------------------------------------
+ 3.7  Passo 7 - Streamlit consome eventos e renderiza
+--------------------------------------------------------------------------------
+
+O Streamlit consome o SSE via httpx.Client.stream() e atualiza a UI a cada
+evento recebido, incrementalmente:
+
+  [x] Input Guardrails (0.01s)
+  [x] Ingestion (0.1s) - PNG, 512 KB
+  [x] Classification (1.2s) - e diagrama (92% conf.)
+  [x] Extraction (3.2s) - 8 componentes, 5 relacoes
+  [x] RAG (0.5s) - 2 analises similares
+  [x] Report (4.1s) - 3 riscos, 5 recomendacoes
+  [x] QA (1.8s) - Score 92% - aprovado
+  [x] Persistido + Webhook (opcional)
+
+Quando recebe o evento final (step='done'), o Streamlit:
+  - Fecha o stream SSE
+  - Renderiza o relatorio completo:
+       * Resumo executivo
+       * Componentes (grid 3 colunas)
+       * Riscos (expanders com badges coloridos)
+       * Recomendacoes (separando [RAG] das demais)
+       * Score de QA (metric widget)
+       * Botao de download do JSON completo
+
+
+================================================================================
+ 4. WORKFLOW DETALHADO - CAMINHO B (AWS SQS + S3 + WEBHOOK)        [cap. 4]
+================================================================================
+
+Este e o fluxo de producao - acionado pelo time SOAT via AWS SQS.
+Nao exige o Streamlit; o retorno e entregue por webhook HTTP.
+
+--------------------------------------------------------------------------------
+ 4.1  Passo 1 - SOAT publica mensagem no SQS
+--------------------------------------------------------------------------------
+
+O time SOAT faz upload do arquivo no S3 e publica a mensagem:
+
+  {
+    "file_name":    "diagrama.png",
+    "s3_url":       "https://s3.amazonaws.com/...",
+    "callback_url": "https://soat-api.example.com/webhook"
+  }
+
+A fila e referenciada pela variavel de ambiente SQS_QUEUE_URL.
+
+--------------------------------------------------------------------------------
+ 4.2  Passo 2 - Consumer thread recebe mensagem
+--------------------------------------------------------------------------------
+
+O ia-service inicia um SQS Consumer como thread daemon no startup do
+FastAPI (sem bloquear o event loop HTTP).
+
+Configuracao do receive:
+  - MaxMessages = 5 por batch
+  - WaitTimeSeconds = 20 (long polling, reduz chamadas vazias)
+  - VisibilityTimeout = 300s (5 minutos)
+
+Se o pipeline nao concluir em 300s, a mensagem volta automaticamente para
+a fila e sera reentregue.
+
+--------------------------------------------------------------------------------
+ 4.3  Passo 3 - Validacoes de idempotencia e poison pill
+--------------------------------------------------------------------------------
+
+Antes de processar, o consumer valida:
+
+  a) Idempotencia:
+     - Consulta se sqs_message_id ja existe em 'analyses'
+     - Se sim, descarta a mensagem (evita reprocessamento em duplicidades)
+
+  b) Poison pill detection:
+     - Le ApproximateReceiveCount do atributo SQS
+     - Se > 3, loga warning (mensagem esta falhando repetidamente)
+     - Nao bloqueia, mas serve para alertas
+
+--------------------------------------------------------------------------------
+ 4.4  Passo 4 - Download do S3
+--------------------------------------------------------------------------------
+
+O consumer baixa o arquivo via URL pre-assinada usando 'tenacity' com
+retry de 3 tentativas e backoff exponencial (2s -> 4s -> 10s max).
+
+Se os 3 retries falharem:
+  - analise marcada com status 'erro'
+  - webhook enviado com error_message
+  - mensagem deletada do SQS (nao e retentavel)
+
+--------------------------------------------------------------------------------
+ 4.5  Passo 5 - Execucao do pipeline
+--------------------------------------------------------------------------------
+
+Com os bytes em memoria, o consumer chama:
+
+   run_pipeline(file_bytes, file_name)
+
+Que delega para o mesmo AnalyzeDiagramUseCase usado pelo fluxo Streamlit.
+As 8 etapas executam identicamente (ver capitulo 5).
+
+Neste caminho, o pipeline executa sincronamente na thread do consumer
+(nao passa pelo Celery - a fila SQS ja prove a assincronia).
+
+--------------------------------------------------------------------------------
+ 4.6  Passo 6 - Devolutiva via webhook
+--------------------------------------------------------------------------------
+
+Apos o pipeline concluir (sucesso ou erro), o WebhookSender envia:
+
+  POST {callback_url}
+  Content-Type: application/json
+  {
+    "analysis_id":   "<uuid>",
+    "status":        "analisado" | "erro",
+    "report":        { ... } | null,
+    "error_message": null | "<mensagem>",
+    "completed_at":  "2026-04-16T12:00:00Z"
+  }
+
+Politica de retry:
+  - 3 tentativas com backoff exponencial (2s -> 4s -> 8s)
+  - Retenta em timeout, erro de conexao, resposta 5xx
+  - NAO retenta em resposta 4xx
+  - Falha total nao bloqueia - o resultado ja esta no banco
+
+--------------------------------------------------------------------------------
+ 4.7  Passo 7 - Delete da mensagem no SQS
+--------------------------------------------------------------------------------
+
+Somente APOS o pipeline concluir (sucesso ou falha controlada) e o
+webhook ser tentado, o consumer chama:
+
+   sqs.delete_message(ReceiptHandle=...)
+
+Se o worker crashar antes desse ponto, o SQS reentrega a mensagem apos
+o visibility timeout, garantindo "at-least-once delivery".
+
+
+================================================================================
+ 5. PIPELINE DE IA - AS 5 ETAPAS + GUARDRAILS                      [cap. 5]
+================================================================================
+
+As etapas sao executadas SEQUENCIALMENTE pelo AnalyzeDiagramUseCase.
+A saida de cada etapa alimenta a proxima. O ExtractionResult serve como
+"ground truth" para todas as validacoes posteriores (anti-alucinacao).
+
+--------------------------------------------------------------------------------
+ 5.1  Etapa 0 - Input Guardrails
+--------------------------------------------------------------------------------
+
+Arquivo: domain/shared/input_guardrail.py :: InputGuardrailService
+
+O que faz:
+  - Sanitiza o filename (remove path traversal como ../, chars perigosos)
+  - Limita o filename a 255 caracteres
+  - Detecta prompt injection no filename (25+ padroes regex):
+       * Override de instrucoes: "ignore previous instructions"
+       * Role-play malicioso: "you are now..."
+       * Exfiltracao: "reveal your system prompt"
+       * Delimitadores: [INST], <<SYS>>, ###
+
+Resultado:
+  - Sucesso -> pipeline prossegue
+  - Falha   -> lanca GuardrailError (BLOQUEIA o pipeline)
+
+Por que existe:
+  Prompt injection via filename e vetor real de ataque. Antes de qualquer
+  LLM tocar o dado, filtramos inputs obviamente maliciosos.
+
+--------------------------------------------------------------------------------
+ 5.2  Etapa 1 - Ingestion
+--------------------------------------------------------------------------------
+
+Arquivo: pipeline/diagram_ingestion_step.py
+
+O que faz, passo a passo:
+  1. Valida tamanho: rejeita > 20 MB
+  2. Detecta MIME type pelo filename
+  3. Valida tipo suportado: png, jpg, jpeg, gif, webp, pdf
+  4. Converte bytes -> Base64 (via DiagramFile.create)
+  5. Cria registro em 'analyses' (status: recebido -> em_processamento)
+
+Saida: DiagramFile (Value Object imutavel)
+  {
+    "file_name":     "diagrama.png",
+    "file_type":     "png",
+    "media_type":    "image/png",
+    "content_base64": "iVBORw0KGgo...",
+    "file_size_kb":   512.3
+  }
+
+Resultado:
+  - Sucesso -> continua
+  - Falha   -> IngestionError (BLOQUEIA)
+
+Por que base64:
+  A API do LLM Vision recebe imagens no formato
+  data:{media_type};base64,{conteudo}. Evita upload separado.
+
+--------------------------------------------------------------------------------
+ 5.3  Etapa 2 - Classification (Vision LLM)
+--------------------------------------------------------------------------------
+
+Arquivo: infrastructure/llm/openai_adapter.py :: classify_image
+
+O que faz:
+  - Envia a imagem ao LLM Vision (gpt-4o) com um prompt rigoroso:
+       "Esta imagem e um diagrama de arquitetura de software?
+        Criterios de aceitacao: caixas, setas, componentes tecnicos
+        Criterios de rejeicao: fotos, mockups, organogramas"
+  - O LLM retorna JSON: { "is_architecture_diagram": bool, "confidence": float }
+
+Regra de negocio:
+  - confidence >= 0.75 e is_architecture_diagram = true -> prossegue
+  - Caso contrario -> analise rejeitada com explicacao
+
+Fallback de disponibilidade:
+  - Se a API falhar, assume is_architecture_diagram = true
+  - A etapa de extracao rejeitara naturalmente se nao houver componentes
+
+Por que classificar antes de extrair:
+  Extrair de uma foto de gato consumiria tokens do modelo em vao. A
+  classificacao e uma triagem rapida e barata.
+
+--------------------------------------------------------------------------------
+ 5.4  Etapa 3 - Extraction (Vision LLM)
+--------------------------------------------------------------------------------
+
+Arquivo: infrastructure/llm/openai_adapter.py :: extract_components
+
+NAO USA OCR. O LLM interpreta o diagrama com compreensao semantica -
+le setas, caixas, labels e padroes arquiteturais.
+
+Como funciona:
+  1. Monta bloco multimodal no formato OpenAI Vision:
+       {"type": "image_url", "image_url": {"url": "data:image/png;base64,..."}}
+  2. System prompt define o papel: "arquiteto de software senior"
+  3. Ativa response_format=json_object (forca saida em JSON valido)
+  4. Parseia a resposta e valida 4 campos obrigatorios:
+       components      (lista de strings)
+       relationships   (lista de strings)
+       patterns        (lista de strings)
+       raw_description (texto)
+  5. Rejeita se zero componentes foram identificados
+
+Saida: ExtractionResult (ground truth do pipeline)
+
+Exemplo:
+  {
+    "components": ["API Gateway", "Auth Service", "User DB", "Redis Cache"],
+    "relationships": [
+      "Client -> API Gateway: requisicoes HTTP",
+      "API Gateway -> Auth Service: valida JWT"
+    ],
+    "patterns": ["Microservices", "API Gateway Pattern"],
+    "raw_description": "Arquitetura de microsservicos com..."
+  }
+
+Persistencia: extraction_results (JSONB)
+
+Resultado:
+  - Sucesso -> continua
+  - Falha   -> ExtractionError (BLOQUEIA)
+
+--------------------------------------------------------------------------------
+ 5.5  Etapa 3.5 - Guardrail de Extracao
+--------------------------------------------------------------------------------
+
+Arquivo: domain/shared/input_guardrail.py
+
+Apos o LLM retornar, valida o SCHEMA e varre os DADOS:
+  - Chaves obrigatorias presentes
+  - Tipos corretos (listas de strings, etc.)
+  - Limites: max 200 componentes, max 500 relacionamentos
+  - Prompt injection nos valores retornados pelo LLM (defesa em profundidade)
+
+Por que validar DEPOIS do LLM:
+  O LLM pode retornar strings com instrucoes maliciosas que seriam
+  concatenadas em prompts futuros (RAG, Report). Filtramos aqui.
+
+Resultado:
+  - Sucesso -> continua
+  - Falha   -> GuardrailError (BLOQUEIA)
+
+--------------------------------------------------------------------------------
+ 5.6  Etapa 4 - RAG (pgvector)
+--------------------------------------------------------------------------------
+
+Arquivo: infrastructure/vector_store/pgvector_adapter.py :: PGVectorAdapter
+
+IMPORTANTE: esta etapa e NON-BLOCKING. Se falhar, retorna
+RagContext.empty() e o pipeline prossegue sem enriquecimento.
+
+Fase 1 - Indexacao (toda nova analise):
+  - Monta LangChain Document com:
+       page_content = raw_description + components + patterns + relationships
+  - Gera embedding:
+       * Padrao: OpenAI text-embedding-3-small (1536 dim)
+       * Fallback: HuggingFace all-MiniLM-L6-v2 (local, sem API)
+  - Armazena em langchain_pg_embedding
+
+Fase 2 - Recuperacao:
+  - query = raw_description + components + patterns
+  - similarity_search_with_score(k=3, filter={"has_report": True})
+  - Aplica threshold: score < 0.3 (distancia coseno) = > 70% similar
+  - Se nenhum resultado passa o threshold -> RagContext.empty()
+
+Fase 3 - Enriquecimento:
+  - Passa os documentos similares por um LLM chain 'rag_enrichment'
+  - Produz um texto sintetizando padroes de risco recorrentes e boas
+    praticas observadas em arquiteturas similares
+  - Este texto e injetado no prompt do proximo passo (Report)
+
+Saida: RagContext
+  {
+    "has_context":             true,
+    "enrichment_text":         "<texto sintetizado>",
+    "similar_analyses_count":  2
+  }
+
+Por que non-blocking:
+  Em cold start (banco vazio) ou falha de infra, o pipeline deve
+  funcionar. RAG e enriquecimento, nao dependencia.
+
+--------------------------------------------------------------------------------
+ 5.7  Etapa 5 - Report + Riscos (Text LLM)
+--------------------------------------------------------------------------------
+
+Arquivo: infrastructure/llm/openai_adapter.py :: generate_report
+
+Gera o relatorio tecnico completo, INCLUINDO classificacao de riscos,
+em uma unica chamada ao LLM (reduz latencia e custo, mantem coerencia).
+
+Input do prompt:
+  - ExtractionResult (componentes, relacoes, padroes, descricao)
+  - RagContext (enrichment_text quando disponivel)
+  - Feedback de tentativas anteriores (se for re-tentativa pelo QA)
+
+Riscos sao classificados em 6 categorias (enum RiskCategory):
+  - SPOF           (ponto unico de falha)
+  - Seguranca      (auth, exposicao, endpoints)
+  - Escalabilidade (gargalos, ausencia de cache, filas sem DLQ)
+  - Acoplamento   (dependencias sincronas, falta de interfaces)
+  - Observabilidade (ausencia de logs, metricas, tracing)
+  - Resiliencia   (sem circuit breaker, retry, fallback)
+
+Cada risco contem:
+  - type (categoria)
+  - description
+  - severity (ALTO | MEDIO | BAIXO)
+  - affected_components
+  - mitigation
+
+Recomendacoes influenciadas pelo RAG sao prefixadas com "[RAG]"
+para transparencia ao usuario.
+
+Backends suportados:
+  - langchain (padrao): LangChain chain com ChatPromptTemplate + ChatOpenAI
+                        + JsonOutputParser. Modelo configuravel (LLM_MODEL).
+  - finetuned_api     : Modelo treinado via QLoRA hospedado no HuggingFace
+  - finetuned_local   : Adapter carregado localmente (exige GPU)
+
+Pos-processamento server-side:
+  - risk_severity_summary e recalculado pelo TechnicalReport.risk_severity_summary
+  - NAO confiamos no LLM para somar ALTO/MEDIO/BAIXO
+
+Resultado:
+  - Sucesso -> continua
+  - Falha   -> ReportGenerationError (BLOQUEIA)
+
+--------------------------------------------------------------------------------
+ 5.8  Etapa 5.5 - Output Guardrails
+--------------------------------------------------------------------------------
+
+Arquivo: domain/shared/output_guardrail.py :: OutputGuardrailService
+
+Valida e sanitiza o relatorio ANTES de persistir/entregar.
+
+Validacoes aplicadas:
+
+  a) Validacao de Schema:
+     - Chaves obrigatorias presentes
+     - Tipos corretos
+     - Severidades validas (ALTO | MEDIO | BAIXO apenas)
+
+  b) Filtro de Conteudo Proibido:
+     - Conteudo discriminatorio
+     - Instrucoes para atividades ilegais
+     - Engenharia social
+
+  c) Deteccao de PII (e redacao recursiva):
+     - CPF, CNPJ
+     - Email, telefone, IPv4/IPv6
+     - API keys (OpenAI sk-, GitHub ghp_, Slack, AWS)
+     - Numeros de cartao de credito
+     - Substitui valores sensiveis por [REDACTED]
+
+  d) Domain Guardrail (GuardrailService - grounding check):
+     - components_identified nao pode estar vazio
+     - Max 20% dos componentes do relatorio podem nao existir na extracao
+     - recommendations nao pode estar vazio
+     - executive_summary com >= 100 caracteres
+
+Resultado:
+  - Sucesso -> continua
+  - Falha   -> ReportGenerationError (BLOQUEIA)
+
+--------------------------------------------------------------------------------
+ 5.9  Etapa 6 - QA (2 fases + loop de refinamento)
+--------------------------------------------------------------------------------
+
+Arquivo: application/use_cases/analyze_diagram.py
+         metodos: _deterministic_qa_checks, _evaluate_quality
+
+FASE 1 - Verificacoes deterministicas (sem LLM):
+  - components_identified nao vazio
+  - architectural_risks nao vazio
+  - recommendations nao vazio
+  - executive_summary >= 100 chars
+  - Grounding check: >= 80% dos componentes do relatorio devem existir
+    na extracao original (anti-alucinacao dura)
+
+Se FASE 1 falhar -> relatorio rejeitado SEM chamar LLM (economia de tokens).
+
+FASE 2 - Auditor LLM adversarial:
+  - System prompt: "auditor tecnico adversarial que busca falhas"
+  - response_format = json_object
+  - Criterios ponderados:
+       * Completude   30% (campos obrigatorios preenchidos)
+       * Consistencia 40% (componentes/riscos batem com a extracao)
+       * Coerencia    20% (recomendacoes vinculadas aos riscos)
+       * Qualidade    10% (linguagem tecnica, sem generalidades)
+  - Score minimo obrigatorio: MIN_SCORE = 0.6
+
+Saida: QAScore
+  {
+    "is_valid":            true | false,
+    "completeness_score":  0.92,
+    "issues_found":        [],
+    "quality_notes":       "Relatorio consistente e bem fundamentado.",
+    "status":              "analisado" | "rejeitado"
+  }
+
+LOOP DE REFINAMENTO:
+  Se QA rejeitar (is_valid=false):
+    1. Captura os issues_found
+    2. Re-chama o LLM de Report com uma secao
+       "CORRIJA OBRIGATORIAMENTE: <lista de issues>"
+    3. Maximo de 2 tentativas
+    4. Se falhar apos 2x -> QAError (BLOQUEIA)
+
+Resiliencia:
+  Se o LLM de QA estiver indisponivel:
+    - Assume score conservador 0.7
+    - is_valid = true (desde que FASE 1 tenha passado)
+    - Nao bloqueia o pipeline
+
+--------------------------------------------------------------------------------
+ 5.10  Etapa 7 - Persistencia + Webhook
+--------------------------------------------------------------------------------
+
+Ao final do pipeline (sucesso):
+  1. INSERT em reports (relatorio + metricas de QA)
+  2. UPDATE em analyses (status = 'analisado', updated_at)
+  3. Publica evento final via Redis:
+       publish(job:{id}, {"step":"done","status":"complete","data":{...}})
+  4. (Somente caminho SQS) -> POST callback_url (webhook)
+
+Em caso de falha bloqueante:
+  1. UPDATE em analyses (status = 'erro', error_message = '...')
+  2. Publica evento de erro via Redis
+  3. (Somente caminho SQS) -> POST callback_url com status='erro'
+
+Observacao:
+  O resultado e SEMPRE persistido antes do webhook. Se o webhook falhar,
+  o time SOAT pode consultar o relatorio via report-api.
+
+
+================================================================================
+ 6. CONVERGENCIA E TRATAMENTO DE FALHAS                            [cap. 6]
+================================================================================
+
+--------------------------------------------------------------------------------
+ 6.1  Ground Truth (ExtractionResult como ancora)
+--------------------------------------------------------------------------------
+
+A saida da Etapa 3 (Extraction) e a fonte de verdade para todo o pipeline.
+Todas as etapas seguintes recebem a extracao original e sao validadas
+contra ela:
+
+   ExtractionResult
+        |
+        +-- RAG:    busca similares com base na extracao
+        +-- Report: gera relatorio com riscos e valida grounding
+        +-- QA:     exige 80% de overlap entre relatorio e extracao
+
+Isso evita que alucinacoes do LLM de relatorio se propaguem sem controle.
+
+--------------------------------------------------------------------------------
+ 6.2  Estrategias de bloqueio x non-blocking
+--------------------------------------------------------------------------------
+
+  Etapas BLOQUEANTES (falha -> pipeline para):
+    0. Input Guardrails        -> GuardrailError
+    1. Ingestion               -> IngestionError
+    2. Classification (<= 75%) -> rejeicao com mensagem
+    3. Extraction              -> ExtractionError
+    3.5 Guardrail Extracao     -> GuardrailError
+    5. Report                  -> ReportGenerationError
+    5.5 Output Guardrails      -> ReportGenerationError
+    6. QA (apos 2 tentativas)  -> QAError
+
+  Etapas NON-BLOCKING (falha -> continua):
+    4. RAG                     -> RagContext.empty()
+    6. QA LLM indisponivel     -> score conservador 0.7
+    7. Webhook                 -> loga erro, resultado ja persistido
+
+--------------------------------------------------------------------------------
+ 6.3  Tratamento de falhas por etapa
+--------------------------------------------------------------------------------
+
+Em TODOS os casos de falha bloqueante:
+  1. analysis.fail(step, message) atualiza o agregado
+  2. O repositorio persiste status='erro' + error_message no banco
+  3. Evento de erro e publicado via Redis (frontend informado)
+  4. Domain Event AnalysisFailedEvent e emitido
+  5. No caminho SQS, webhook e enviado com status='erro'
+  6. A mensagem SQS NAO e deletada -> volta para retry apos visibility timeout
+
+Excecoes tipadas por etapa:
+  IngestionError, ExtractionError, ReportGenerationError,
+  RAGError, QAError, GuardrailError
+
+Cada uma carrega o campo 'step' indicando a etapa de origem.
+
+--------------------------------------------------------------------------------
+ 6.4  Loop de refinamento do QA
+--------------------------------------------------------------------------------
+
+Fluxo completo:
+
+  Tentativa 1:
+    Report gera relatorio
+    QA avalia
+    Se is_valid = false:
+       capturar issues
+       ir para Tentativa 2
+
+  Tentativa 2:
+    Report gera NOVAMENTE com prompt enriquecido:
+       "Tentativa anterior foi rejeitada.
+        CORRIJA OBRIGATORIAMENTE:
+          - Issue 1
+          - Issue 2"
+    QA reavalia
+    Se is_valid = false:
+       lanca QAError (pipeline falha)
+    Se is_valid = true:
+       prossegue para persistencia
+
+Por que maximo 2 tentativas:
+  LLMs tendem a repetir os mesmos padroes de erro. Tentar 10x nao
+  converge - gasta tokens e aumenta latencia. Falha rapida > loop
+  infinito.
+
+
+================================================================================
+ 7. PERSISTENCIA E OBSERVABILIDADE                                 [cap. 7]
+================================================================================
+
+--------------------------------------------------------------------------------
+ 7.1  Tabelas do PostgreSQL
+--------------------------------------------------------------------------------
+
+  analyses
+    id UUID PK
+    status VARCHAR(20)   -- recebido | em_processamento | analisado | erro
+    file_name VARCHAR(255)
+    file_type VARCHAR(10)
+    s3_key VARCHAR(512) NULL
+    sqs_message_id VARCHAR(255) NULL  -- chave de idempotencia SQS
+    error_message TEXT NULL
+    created_at, updated_at TIMESTAMPTZ
+
+  extraction_results
+    id UUID PK
+    analysis_id UUID FK -> analyses(id) ON DELETE CASCADE
+    components JSONB
+    relationships JSONB
+    patterns JSONB
+    raw_description TEXT
+    created_at TIMESTAMPTZ
+
+  reports
+    id UUID PK
+    analysis_id UUID FK -> analyses(id) ON DELETE CASCADE
+    components_identified JSONB
+    architectural_risks JSONB
+    recommendations JSONB
+    executive_summary TEXT
+    rag_used BOOLEAN
+    qa_is_valid BOOLEAN
+    qa_completeness_score FLOAT
+    qa_issues_found JSONB
+    qa_quality_notes TEXT
+    created_at, updated_at TIMESTAMPTZ
+
+  langchain_pg_embedding         -- gerenciada pelo LangChain
+    embedding VECTOR
+    document TEXT
+    cmetadata JSONB
+    -- Indice HNSW (vector_cosine_ops), m=16, ef_construction=64
+
+--------------------------------------------------------------------------------
+ 7.2  Redis (broker + pub/sub + event store)
+--------------------------------------------------------------------------------
+
+Funcoes:
+  - Broker do Celery (filas de tasks)
+  - Canal pub/sub para eventos SSE (canal: job:{job_id})
+  - Armazenamento temporario de eventos para polling
+    (GET /jobs/{id}/status le o ultimo evento do Redis)
+
+TTL:
+  Canais de job sao voluntariamente ephemeros - apos o consumo do SSE,
+  os eventos nao precisam persistir. O resultado final esta no banco.
+
+--------------------------------------------------------------------------------
+ 7.3  Logs estruturados (structlog)
+--------------------------------------------------------------------------------
+
+Todos os servicos emitem logs JSON via structlog:
+  - Timestamp ISO
+  - Nome do logger
+  - Nivel (DEBUG, INFO, WARNING, ERROR)
+  - Campos contextuais (analysis_id via bind)
+
+Padrao de nome de evento: componente.acao.resultado
+  vision_llm.extract.done
+  pipeline.qa_rejected.refinement
+  sqs.consumer.poison_pill_detected
+  webhook.send.retry
+
+Isso permite filtrar/analisar por analysis_id no ELK/Grafana.
+
+--------------------------------------------------------------------------------
+ 7.4  Domain Events emitidos
+--------------------------------------------------------------------------------
+
+O AnalysisAggregate emite eventos a cada transicao de estado:
+
+  DiagramReceivedEvent        -- analise criada
+  DiagramIngestedEvent        -- arquivo validado e convertido
+  ComponentsExtractedEvent    -- Vision LLM extraiu componentes
+  ReportGeneratedEvent        -- relatorio tecnico gerado
+  QAValidationCompletedEvent  -- QA executou (aprovado ou rejeitado)
+  AnalysisCompletedEvent      -- pipeline finalizou com sucesso
+  AnalysisFailedEvent         -- qualquer etapa bloqueante falhou
+
+Coleta via aggregate.pull_events() (padrao outbox).
+
+
+================================================================================
+ 8. WORKFLOW DE CONSULTA DE RELATORIO                              [cap. 8]
+================================================================================
+
+Apos o pipeline concluir, o cliente (Streamlit, SOAT ou integracao
+externa) consulta via report-api (:8001), que e READ-ONLY.
+
+--------------------------------------------------------------------------------
+ 8.1  GET /reports (lista paginada)
+--------------------------------------------------------------------------------
+
+  GET http://localhost:8001/reports?limit=20&offset=0
+
+  Resposta:
+  {
+    "total":  5,
+    "limit":  20,
+    "offset": 0,
+    "items": [
+      { "analysis_id": "...", "file_name": "...", "status": "analisado", ... }
+    ]
+  }
+
+Usado por:
+  - Streamlit (sidebar de historico)
+  - Dashboards administrativos do SOAT
+
+--------------------------------------------------------------------------------
+ 8.2  GET /reports/{id} (detalhe)
+--------------------------------------------------------------------------------
+
+  GET http://localhost:8001/reports/{analysis_id}
+
+  Resposta 200 - relatorio completo com riscos, recomendacoes, QA.
+  Resposta 404 - analise nao encontrada.
+
+Nota: este endpoint le diretamente da tabela 'reports' via SQLAlchemy.
+Nao passa por LLM nem recomputa nada.
+
+--------------------------------------------------------------------------------
+ 8.3  GET /analyses/{id}/status (acompanhamento)
+--------------------------------------------------------------------------------
+
+Servido pelo ia-service (nao pelo report-api):
+
+  GET http://localhost:8000/analyses/{analysis_id}/status
+
+  Resposta:
+  {
+    "analysis_id":   "uuid",
+    "status":        "recebido" | "em_processamento" | "analisado" | "erro",
+    "file_name":     "diagrama.png",
+    "error_message": null
+  }
+
+Uso: clientes que nao suportam SSE podem fazer polling deste endpoint.
+
+
+================================================================================
+ 9. RESUMO VISUAL DO WORKFLOW                                      [cap. 9]
+================================================================================
+
+  USUARIO
+     |
+     | upload PNG/PDF
+     v
+  STREAMLIT (:8501)
+     |
+     | POST /analyze/async (multipart)
+     v
+  IA-SERVICE (:8000) ---> cria job_id ---> CELERY (dispatch)
+     |                                         |
+     | responde 202 {job_id}                   v
+     |                                     CELERY WORKER
+     | GET /jobs/{id}/events (SSE)             |
+     |<------------------------+               |
+     |                         |               v
+     |                     REDIS (pub/sub) <---+  publica eventos
+     |                         ^               |
+     |                         |               v
+     |                         |   +-------------------------------+
+     |                         |   | PIPELINE (executa em ordem)   |
+     |                         |   |  0. Input Guardrails          |
+     |                         |   |  1. Ingestion                 |
+     |                         |   |  2. Classification (Vision)   |
+     |                         |   |  3. Extraction (Vision)       |
+     |                         |   |  3.5 Guardrail Extracao       |
+     |                         |   |  4. RAG (pgvector)            |
+     |                         |   |  5. Report + Riscos (Text)    |
+     |                         |   |  5.5 Output Guardrails        |
+     |                         |   |  6. QA (determ + LLM, loop 2x)|
+     |                         |   |  7. Persist + Webhook         |
+     |                         |   +-------------------------------+
+     |                         |               |
+     |                         |               v
+     |                         |     POSTGRES + PGVECTOR (:5432)
+     |                         |               |
+     |                         +---------------+
+     v
+  renderiza relatorio final (componentes, riscos, recomendacoes, QA score)
+
+Caminho alternativo (SOAT):
+  SOAT -> SQS -> Consumer Thread -> S3 download -> PIPELINE -> Webhook callback
+
+
+================================================================================
+ 10. GLOSSARIO                                                     [cap. 10]
+================================================================================
+
+  Aggregate        Padrao DDD: objeto raiz que protege invariantes de um
+                   conjunto de entidades (ex: AnalysisAggregate).
+
+  Composition Root Ponto unico onde o grafo de dependencias e montado
+                   (ia-service/app/infrastructure/composition_root.py).
+
+  Domain Event     Evento emitido pelo agregado a cada transicao relevante
+                   de estado (ex: ReportGeneratedEvent).
+
+  Grounding Check  Validacao que exige que X% dos componentes do relatorio
+                   existam na extracao original. Anti-alucinacao.
+
+  Ground Truth     Fonte de verdade para validar etapas posteriores. No
+                   pipeline, e o ExtractionResult (saida do Vision LLM).
+
+  Guardrail        Camada de protecao aplicada a inputs, dados internos ou
+                   outputs para bloquear entradas maliciosas, alucinacoes
+                   ou vazamento de PII.
+
+  HNSW             Hierarchical Navigable Small World. Indice vetorial
+                   usado pelo pgvector para busca por similaridade rapida.
+
+  Non-blocking     Etapa cuja falha NAO interrompe o pipeline (ex: RAG).
+
+  Pipeline         Sequencia ordenada das 8 etapas do AnalyzeDiagramUseCase.
+
+  Port / Adapter   Interface abstrata (Port) definida na camada de
+                   Application, com implementacao concreta (Adapter) na
+                   camada de Infrastructure (padrao Hexagonal).
+
+  RAG              Retrieval-Augmented Generation. Recupera analises
+                   similares no pgvector e injeta no prompt de geracao.
+
+  SSE              Server-Sent Events. Streaming HTTP unidirecional do
+                   ia-service para o cliente.
+
+  Value Object     Padrao DDD: objeto imutavel definido pelos seus valores
+                   (ex: DiagramFile, QAScore, AnalysisId).
+
+  Visibility
+  Timeout          Tempo que o SQS "esconde" a mensagem apos o receive.
+                   Se o consumer nao deleta nesse prazo, a mensagem volta.
+
+================================================================================
+ FIM DA DOCUMENTACAO
+================================================================================

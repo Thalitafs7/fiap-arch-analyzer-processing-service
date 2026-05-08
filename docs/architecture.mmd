@@ -1,0 +1,129 @@
+%%{init: {
+  "theme": "dark",
+  "themeVariables": {
+    "fontSize": "18px",
+    "fontFamily": "Arial, sans-serif",
+    "primaryColor": "#1e3a5f",
+    "primaryTextColor": "#e8f4ff",
+    "primaryBorderColor": "#4a90d9",
+    "lineColor": "#7ab8e8",
+    "background": "#0d1117",
+    "clusterBkg": "#161b22",
+    "clusterBorder": "#30363d",
+    "edgeLabelBackground": "#161b22"
+  },
+  "flowchart": {
+    "rankSpacing": 60,
+    "nodeSpacing": 30,
+    "curve": "basis",
+    "padding": 16
+  }
+}}%%
+
+graph TD
+
+%% ─────────────────────────────────────────
+%%  ENTRADAS SOAT
+%% ─────────────────────────────────────────
+    subgraph SOAT["  ☁  SOAT — Externo  "]
+        direction LR
+        SQS["AWS SQS\nFila"]
+        S3["AWS S3\nDiagrama"]
+    end
+
+%% ─────────────────────────────────────────
+%%  ① CONSUMO SQS
+%% ─────────────────────────────────────────
+    subgraph C1["  ①  Consumo SQS  "]
+        direction LR
+        POLL["🔄 SQS Consumer\nlong polling · max 5 msgs"]
+        IDEM{"♻ Já\nprocessado?"}
+        DL["⬇ Download\nURL S3 · retry 3×"]
+        POLL --> IDEM -->|"novo"| DL
+    end
+
+%% ─────────────────────────────────────────
+%%  ② PROCESSAMENTO DE DIAGRAMA
+%% ─────────────────────────────────────────
+    subgraph C2["  ②  Processamento de Diagrama  "]
+        direction LR
+        ORCH["⚙ Orchestrator\ngestão de status"]
+        ING["📥 Ingestion\nvalida · base64"]
+        EXT["🔍 Extraction\nLLM Vision\ncomponentes · padrões"]
+        RAG["🔗 RAG Agent\npgvector · não-bloq."]
+        RISK["⚠ Risk Agent\nLLM\n6 categorias de risco"]
+        ORCH --> ING --> EXT --> RAG
+        EXT --> RISK
+        RAG -->|"contexto histórico"| RISK
+    end
+
+%% ─────────────────────────────────────────
+%%  ③ GERADOR DE RELATÓRIO
+%% ─────────────────────────────────────────
+    subgraph C3["  ③  Gerador de Relatório  "]
+        direction LR
+        SW{"🔀 Backend\nSwitch"}
+        LLM["🤖 LLM Principal\nLangChain\nJsonOutputParser"]
+        FT["🧠 LLM Fine-Tuned\nQLoRA Adapter\nHuggingFace Inference"]
+        GR["🛡 Guardrails\ngrounding · completude\nJSON Schema"]
+        QA["✅ QA Agent\nchecks determin.\nLLM · score ≥ 0.6"]
+        SW -->|"llm"| LLM
+        SW -->|"finetuned"| FT
+        LLM --> GR
+        FT --> GR
+        GR --> QA
+    end
+
+%% ─────────────────────────────────────────
+%%  SAÍDA — WEBHOOK
+%% ─────────────────────────────────────────
+    WH["📤 Webhook Sender\nPOST callback_url · retry backoff"]
+    CB["📬 SOAT — Webhook Endpoint\nresultado da análise"]
+
+%% ─────────────────────────────────────────
+%%  PERSISTÊNCIA
+%% ─────────────────────────────────────────
+    subgraph DB["  🗄  PostgreSQL + pgvector  "]
+        direction LR
+        DA["analyses\nstatus · ciclo de vida"]
+        DE["extraction_results\ncache intermediário"]
+        DR["reports\nrelatório + QA"]
+        DV["pg_embedding\nvectors 1536d · HNSW"]
+    end
+
+%% ─────────────────────────────────────────
+%%  FLUXO PRINCIPAL
+%% ─────────────────────────────────────────
+    SQS -->|"msg + callback_url"| POLL
+    IDEM -->|"duplicado → skip"| SQS
+    S3 -->|"bytes"| DL
+    DL --> ORCH
+    RISK --> SW
+    QA --> WH
+    WH -->|"POST report"| CB
+
+%% ─────────────────────────────────────────
+%%  PERSISTÊNCIA (tracejado)
+%% ─────────────────────────────────────────
+    ORCH -.->|"status"| DA
+    EXT  -.->|"cache"| DE
+    RAG  <-.->|"indexa / busca"| DV
+    QA   -.->|"relatório"| DR
+
+%% ─────────────────────────────────────────
+%%  ESTILOS
+%% ─────────────────────────────────────────
+    classDef extNode  fill:#0d2137,stroke:#4a90d9,stroke-width:2px,color:#c8e6ff
+    classDef consNode fill:#0a2b1a,stroke:#3daa6e,stroke-width:2px,color:#b0f0d0
+    classDef procNode fill:#1a0e2e,stroke:#9c6dd4,stroke-width:2px,color:#e0c8ff
+    classDef repNode  fill:#2b1a00,stroke:#e09030,stroke-width:2px,color:#ffe5a0
+    classDef dbNode   fill:#0a1e2b,stroke:#4a7fa5,stroke-width:2px,color:#b0d0e8
+    classDef gwNode   fill:#3a2800,stroke:#e09030,stroke-width:3px,color:#ffe5a0
+
+    class SQS,S3,CB extNode
+    class POLL,DL,WH consNode
+    class IDEM gwNode
+    class ORCH,ING,EXT,RAG,RISK procNode
+    class SW gwNode
+    class LLM,FT,GR,QA repNode
+    class DA,DE,DR,DV dbNode

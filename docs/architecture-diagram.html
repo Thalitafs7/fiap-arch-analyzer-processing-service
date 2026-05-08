@@ -1,0 +1,1088 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IADT - Arquitetura do Sistema</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --blue: #58a6ff;
+    --blue-bg: #0d2137;
+    --green: #3fb950;
+    --green-bg: #0a2b1a;
+    --purple: #bc8cff;
+    --purple-bg: #1a0e2e;
+    --orange: #e09030;
+    --orange-bg: #2b1a00;
+    --red: #f85149;
+    --cyan: #79c0ff;
+    --cyan-bg: #0a1e2b;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    min-height: 100vh;
+    overflow-x: auto;
+  }
+
+  h1 {
+    text-align: center;
+    padding: 32px 20px 8px;
+    font-size: 28px;
+    font-weight: 600;
+    letter-spacing: -0.5px;
+  }
+  h1 span { color: var(--blue); }
+
+  .subtitle {
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 14px;
+    margin-bottom: 32px;
+  }
+
+  /* ── Tab navigation ── */
+  .tabs {
+    display: flex;
+    justify-content: center;
+    gap: 4px;
+    margin-bottom: 32px;
+    flex-wrap: wrap;
+    padding: 0 16px;
+  }
+  .tab-btn {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text-muted);
+    padding: 10px 22px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: all .2s;
+  }
+  .tab-btn:hover { border-color: var(--blue); color: var(--text); }
+  .tab-btn.active { background: var(--blue-bg); border-color: var(--blue); color: var(--blue); }
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  /* ── Shared layout ── */
+  .diagram-container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 24px 48px;
+  }
+
+  /* ── PIPELINE VIEW ── */
+  .pipeline {
+    display: flex;
+    gap: 20px;
+    align-items: flex-start;
+    overflow-x: auto;
+    padding-bottom: 16px;
+  }
+  .pipeline-stage {
+    flex: 0 0 280px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    position: relative;
+  }
+  .stage-header {
+    padding: 16px 20px;
+    font-weight: 600;
+    font-size: 15px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .stage-num {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 13px; font-weight: 700;
+    flex-shrink: 0;
+  }
+  .stage-body { padding: 16px 20px; }
+
+  .step-card {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 14px;
+    margin-bottom: 10px;
+    transition: border-color .2s;
+  }
+  .step-card:hover { border-color: var(--blue); }
+  .step-card:last-child { margin-bottom: 0; }
+  .step-card .name { font-weight: 600; font-size: 14px; margin-bottom: 4px; }
+  .step-card .desc { color: var(--text-muted); font-size: 12px; line-height: 1.5; }
+  .step-card .tag {
+    display: inline-block;
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    margin-top: 6px;
+    font-weight: 600;
+  }
+
+  /* Stage colors */
+  .stage-ext .stage-header { background: var(--blue-bg); }
+  .stage-ext .stage-num { background: var(--blue); color: var(--bg); }
+  .stage-ext .step-card:hover { border-color: var(--blue); }
+
+  .stage-ingest .stage-header { background: var(--green-bg); }
+  .stage-ingest .stage-num { background: var(--green); color: var(--bg); }
+
+  .stage-proc .stage-header { background: var(--purple-bg); }
+  .stage-proc .stage-num { background: var(--purple); color: var(--bg); }
+
+  .stage-report .stage-header { background: var(--orange-bg); }
+  .stage-report .stage-num { background: var(--orange); color: var(--bg); }
+
+  .stage-out .stage-header { background: var(--green-bg); }
+  .stage-out .stage-num { background: var(--green); color: var(--bg); }
+
+  .stage-db .stage-header { background: var(--cyan-bg); }
+  .stage-db .stage-num { background: var(--cyan); color: var(--bg); }
+
+  /* Arrow between stages */
+  .pipeline-arrow {
+    flex: 0 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    align-self: center;
+    color: var(--text-muted);
+    font-size: 24px;
+  }
+
+  /* ── AGGREGATES VIEW ── */
+  .aggregates-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 32px;
+  }
+  @media (max-width: 900px) {
+    .aggregates-grid { grid-template-columns: 1fr; }
+  }
+
+  .aggregate-box {
+    background: var(--surface);
+    border: 2px solid var(--border);
+    border-radius: 14px;
+    overflow: hidden;
+  }
+  .agg-header {
+    padding: 20px 24px;
+    border-bottom: 2px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .agg-header .icon {
+    width: 44px; height: 44px;
+    border-radius: 10px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 22px; font-weight: 700;
+  }
+  .agg-header .info h3 { font-size: 18px; font-weight: 700; }
+  .agg-header .info p { color: var(--text-muted); font-size: 12px; margin-top: 2px; }
+
+  .agg-body { padding: 20px 24px; }
+  .agg-section { margin-bottom: 20px; }
+  .agg-section:last-child { margin-bottom: 0; }
+  .agg-section h4 {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+    font-weight: 600;
+  }
+
+  .entity-list { list-style: none; }
+  .entity-list li {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin-bottom: 4px;
+    background: var(--surface2);
+    font-size: 13px;
+  }
+  .entity-list li .badge {
+    flex-shrink: 0;
+    font-size: 9px;
+    padding: 2px 7px;
+    border-radius: 4px;
+    font-weight: 700;
+    margin-top: 2px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .badge-root { background: #f85149; color: #fff; }
+  .badge-entity { background: #58a6ff; color: #0d1117; }
+  .badge-vo { background: #bc8cff; color: #0d1117; }
+  .badge-enum { background: #e09030; color: #0d1117; }
+  .badge-event { background: #3fb950; color: #0d1117; }
+  .badge-svc { background: #f778ba; color: #0d1117; }
+  .badge-id { background: #79c0ff; color: #0d1117; }
+
+  .entity-list li .content { flex: 1; }
+  .entity-list li .content strong { display: block; font-weight: 600; }
+  .entity-list li .content span { color: var(--text-muted); font-size: 11px; }
+
+  /* State machine */
+  .state-machine {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+  .state {
+    padding: 6px 14px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid;
+  }
+  .state-received { background: #0d2137; border-color: #58a6ff; color: #58a6ff; }
+  .state-processing { background: #1a0e2e; border-color: #bc8cff; color: #bc8cff; }
+  .state-analyzed { background: #0a2b1a; border-color: #3fb950; color: #3fb950; }
+  .state-error { background: #2d0a0a; border-color: #f85149; color: #f85149; }
+  .state-arrow { color: var(--text-muted); font-size: 18px; }
+
+  /* ── INFRA VIEW ── */
+  .infra-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 20px;
+  }
+  .infra-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+  }
+  .infra-card h3 {
+    font-size: 16px;
+    margin-bottom: 4px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .infra-card .port {
+    font-size: 11px;
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    padding: 2px 8px;
+    border-radius: 4px;
+    color: var(--cyan);
+    font-family: monospace;
+  }
+  .infra-card .card-desc {
+    color: var(--text-muted);
+    font-size: 13px;
+    margin-bottom: 14px;
+  }
+  .infra-card .dep-list {
+    list-style: none;
+    font-size: 12px;
+  }
+  .infra-card .dep-list li {
+    padding: 4px 0;
+    color: var(--text-muted);
+  }
+  .infra-card .dep-list li::before {
+    content: ">";
+    color: var(--green);
+    margin-right: 6px;
+    font-weight: 700;
+  }
+
+  /* ── Events view ── */
+  .events-flow {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+    max-width: 800px;
+    margin: 0 auto;
+  }
+  .event-row {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .event-line {
+    width: 3px;
+    height: 40px;
+    background: var(--border);
+    margin-left: 22px;
+  }
+  .event-dot {
+    width: 14px; height: 14px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    border: 3px solid;
+  }
+  .event-card {
+    flex: 1;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 18px;
+  }
+  .event-card .ev-name { font-weight: 600; font-size: 14px; }
+  .event-card .ev-ctx { font-size: 11px; color: var(--text-muted); }
+  .event-card .ev-desc { font-size: 12px; color: var(--text-muted); margin-top: 4px; }
+
+  .dot-blue { border-color: var(--blue); background: var(--blue-bg); }
+  .dot-purple { border-color: var(--purple); background: var(--purple-bg); }
+  .dot-green { border-color: var(--green); background: var(--green-bg); }
+  .dot-red { border-color: var(--red); background: #2d0a0a; }
+  .dot-orange { border-color: var(--orange); background: var(--orange-bg); }
+
+  /* Shared kernel box */
+  .shared-kernel {
+    max-width: 800px;
+    margin: 32px auto 0;
+    background: var(--surface);
+    border: 2px dashed var(--border);
+    border-radius: 12px;
+    padding: 24px;
+  }
+  .shared-kernel h3 {
+    font-size: 16px;
+    margin-bottom: 12px;
+    color: var(--cyan);
+  }
+  .sk-items {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .sk-item {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 13px;
+  }
+  .sk-item strong { display: block; font-weight: 600; }
+  .sk-item span { color: var(--text-muted); font-size: 11px; }
+
+  /* Tooltip */
+  .tooltip-container { position: relative; }
+  .tooltip-container .tooltip {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 12px;
+    font-size: 11px;
+    color: var(--text);
+    white-space: nowrap;
+    z-index: 10;
+    pointer-events: none;
+  }
+  .tooltip-container:hover .tooltip { display: block; }
+
+  /* Legend */
+  .legend {
+    display: flex;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+    justify-content: center;
+  }
+  .legend-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-muted);
+  }
+  .legend-dot {
+    width: 10px; height: 10px;
+    border-radius: 3px;
+  }
+</style>
+</head>
+<body>
+
+<h1><span>IADT</span> - Intelligent Architecture Diagram Tool</h1>
+<p class="subtitle">Pipeline de analise automatizada de diagramas de arquitetura com IA</p>
+
+<div class="tabs">
+  <button class="tab-btn active" onclick="switchTab('pipeline')">Pipeline</button>
+  <button class="tab-btn" onclick="switchTab('aggregates')">Aggregates (DDD)</button>
+  <button class="tab-btn" onclick="switchTab('events')">Domain Events</button>
+  <button class="tab-btn" onclick="switchTab('infra')">Infraestrutura</button>
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<!--  TAB 1: PIPELINE                                -->
+<!-- ═══════════════════════════════════════════════ -->
+<div id="tab-pipeline" class="tab-content active">
+  <div class="diagram-container">
+    <div class="legend">
+      <div class="legend-item"><div class="legend-dot" style="background:var(--blue)"></div> Externo (SOAT)</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--green)"></div> Consumo / Saida</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--purple)"></div> Processamento IA</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--orange)"></div> Geracao de Relatorio</div>
+      <div class="legend-item"><div class="legend-dot" style="background:var(--cyan)"></div> Persistencia</div>
+    </div>
+    <div class="pipeline">
+
+      <!-- SOAT -->
+      <div class="pipeline-stage stage-ext">
+        <div class="stage-header"><div class="stage-num">0</div>SOAT (Externo)</div>
+        <div class="stage-body">
+          <div class="step-card">
+            <div class="name">AWS SQS</div>
+            <div class="desc">Fila de mensagens com callback_url para notificacao de resultado</div>
+            <div class="tag" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue)">FILA</div>
+          </div>
+          <div class="step-card">
+            <div class="name">AWS S3</div>
+            <div class="desc">Armazenamento do diagrama de arquitetura (imagem/PDF)</div>
+            <div class="tag" style="background:var(--blue-bg);color:var(--blue);border:1px solid var(--blue)">STORAGE</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pipeline-arrow">&#10132;</div>
+
+      <!-- CONSUMO SQS -->
+      <div class="pipeline-stage stage-ingest">
+        <div class="stage-header"><div class="stage-num">1</div>Consumo SQS</div>
+        <div class="stage-body">
+          <div class="step-card">
+            <div class="name">SQS Consumer</div>
+            <div class="desc">Long polling, max 5 msgs por batch</div>
+          </div>
+          <div class="step-card">
+            <div class="name">Idempotencia</div>
+            <div class="desc">Verifica duplicidade via sqs_message_id antes de processar</div>
+          </div>
+          <div class="step-card">
+            <div class="name">Download S3</div>
+            <div class="desc">Baixa arquivo com retry 3x, cria DiagramFile (Value Object)</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pipeline-arrow">&#10132;</div>
+
+      <!-- PROCESSAMENTO -->
+      <div class="pipeline-stage stage-proc">
+        <div class="stage-header"><div class="stage-num">2</div>Processamento IA</div>
+        <div class="stage-body">
+          <div class="step-card">
+            <div class="name">Orchestrator</div>
+            <div class="desc">Delega ao AnalyzeDiagramUseCase, gerencia ciclo de vida do AnalysisAggregate</div>
+          </div>
+          <div class="step-card">
+            <div class="name">Ingestion Step</div>
+            <div class="desc">Valida arquivo, converte para base64, cria DiagramFile</div>
+            <div class="tag" style="background:var(--purple-bg);color:var(--purple);border:1px solid var(--purple)">RECEIVED &rarr; PROCESSING</div>
+          </div>
+          <div class="step-card">
+            <div class="name">Extraction Step</div>
+            <div class="desc">LLM Vision extrai Components, Relationships e ArchitecturalPatterns</div>
+          </div>
+          <div class="step-card">
+            <div class="name">RAG Agent</div>
+            <div class="desc">Busca analises similares via pgvector (nao-bloqueante). Retorna RagContext</div>
+          </div>
+          <div class="step-card">
+            <div class="name">Risk Agent</div>
+            <div class="desc">Classifica riscos em 6 categorias: SPOF, Seguranca, Escalabilidade, Acoplamento, Observabilidade, Resiliencia</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pipeline-arrow">&#10132;</div>
+
+      <!-- RELATORIO -->
+      <div class="pipeline-stage stage-report">
+        <div class="stage-header"><div class="stage-num">3</div>Geracao de Relatorio</div>
+        <div class="stage-body">
+          <div class="step-card">
+            <div class="name">Backend Switch</div>
+            <div class="desc">Seleciona entre LLM Principal (LangChain) ou LLM Fine-Tuned (QLoRA)</div>
+          </div>
+          <div class="step-card">
+            <div class="name">Report Generation</div>
+            <div class="desc">Gera TechnicalReport com componentes, riscos, recomendacoes e sumario executivo</div>
+          </div>
+          <div class="step-card">
+            <div class="name">Guardrails</div>
+            <div class="desc">Valida: grounding (max 20% alucinacao), completude, tamanho do sumario (min 100 chars)</div>
+            <div class="tag" style="background:var(--orange-bg);color:var(--orange);border:1px solid var(--orange)">DOMAIN SVC</div>
+          </div>
+          <div class="step-card">
+            <div class="name">QA Agent</div>
+            <div class="desc">Checks deterministicos + LLM. Gera QAScore (threshold &ge; 0.6)</div>
+            <div class="tag" style="background:var(--orange-bg);color:var(--orange);border:1px solid var(--orange)">PROCESSING &rarr; ANALYZED</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pipeline-arrow">&#10132;</div>
+
+      <!-- SAIDA -->
+      <div class="pipeline-stage stage-out">
+        <div class="stage-header"><div class="stage-num">4</div>Saida</div>
+        <div class="stage-body">
+          <div class="step-card">
+            <div class="name">Webhook Sender</div>
+            <div class="desc">POST para callback_url com retry backoff exponencial</div>
+          </div>
+          <div class="step-card">
+            <div class="name">SOAT Endpoint</div>
+            <div class="desc">Recebe o resultado completo da analise</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- DB row -->
+    <div style="margin-top:24px">
+      <div class="pipeline-stage stage-db" style="flex:none;max-width:100%">
+        <div class="stage-header"><div class="stage-num">DB</div>PostgreSQL + pgvector</div>
+        <div class="stage-body" style="display:flex;gap:12px;flex-wrap:wrap">
+          <div class="step-card" style="flex:1;min-width:200px">
+            <div class="name">analyses</div>
+            <div class="desc">Status e ciclo de vida do AnalysisAggregate</div>
+          </div>
+          <div class="step-card" style="flex:1;min-width:200px">
+            <div class="name">extraction_results</div>
+            <div class="desc">Cache intermediario dos dados extraidos</div>
+          </div>
+          <div class="step-card" style="flex:1;min-width:200px">
+            <div class="name">reports</div>
+            <div class="desc">Relatorio final + scores de QA</div>
+          </div>
+          <div class="step-card" style="flex:1;min-width:200px">
+            <div class="name">pg_embedding</div>
+            <div class="desc">Vetores 1536d com indice HNSW para RAG</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<!--  TAB 2: AGGREGATES                              -->
+<!-- ═══════════════════════════════════════════════ -->
+<div id="tab-aggregates" class="tab-content">
+  <div class="diagram-container">
+    <div class="aggregates-grid">
+
+      <!-- ANALYSIS AGGREGATE -->
+      <div class="aggregate-box" style="border-color: var(--purple);">
+        <div class="agg-header" style="background: var(--purple-bg);">
+          <div class="icon" style="background: var(--purple); color: var(--bg);">A</div>
+          <div class="info">
+            <h3>AnalysisAggregate</h3>
+            <p>Bounded Context: Diagram Analysis</p>
+          </div>
+        </div>
+        <div class="agg-body">
+
+          <div class="agg-section">
+            <h4>Raiz de Agregado</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge badge-root">ROOT</span>
+                <div class="content">
+                  <strong>AnalysisAggregate</strong>
+                  <span>Controla ciclo de vida da analise. Campos: id, status, file_name, file_type, s3_key, sqs_message_id, diagram_file, extraction_result, error_message</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="agg-section">
+            <h4>Entidades</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge badge-entity">ENTITY</span>
+                <div class="content">
+                  <strong>ExtractionResult</strong>
+                  <span>Resultado da extracao via LLM Vision. Contem: components[], relationships[], patterns[], raw_description</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="agg-section">
+            <h4>Value Objects</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge badge-vo">VO</span>
+                <div class="content">
+                  <strong>DiagramFile</strong>
+                  <span>Arquivo validado e codificado em base64. Max 20MB. Campos: file_name, file_type, media_type, content_base64, file_size_kb</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge badge-vo">VO</span>
+                <div class="content">
+                  <strong>Component</strong>
+                  <span>Componente arquitetural identificado (frozen, imutavel)</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge badge-vo">VO</span>
+                <div class="content">
+                  <strong>Relationship</strong>
+                  <span>Relacao entre componentes: source &rarr; target: description</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge badge-vo">VO</span>
+                <div class="content">
+                  <strong>ArchitecturalPattern</strong>
+                  <span>Padrao identificado (ex: microservices, event-driven)</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="agg-section">
+            <h4>Enumeracoes</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge badge-enum">ENUM</span>
+                <div class="content">
+                  <strong>AnalysisStatus</strong>
+                  <span>RECEIVED &rarr; PROCESSING &rarr; ANALYZED | ERROR</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge badge-enum">ENUM</span>
+                <div class="content">
+                  <strong>FileType</strong>
+                  <span>PNG | JPEG | GIF | WEBP | PDF</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="agg-section">
+            <h4>Maquina de Estados</h4>
+            <div class="state-machine">
+              <div class="state state-received">RECEIVED</div>
+              <span class="state-arrow">&rarr;</span>
+              <div class="state state-processing">PROCESSING</div>
+              <span class="state-arrow">&rarr;</span>
+              <div class="state state-analyzed">ANALYZED</div>
+            </div>
+            <div class="state-machine" style="margin-top:8px;margin-left:0">
+              <div class="state state-processing" style="opacity:0.5">qualquer</div>
+              <span class="state-arrow">&rarr;</span>
+              <div class="state state-error">ERROR</div>
+            </div>
+          </div>
+
+          <div class="agg-section">
+            <h4>Operacoes</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge" style="background:var(--text-muted);color:var(--bg)">CMD</span>
+                <div class="content">
+                  <strong>create()</strong><span>Factory: cria no estado RECEIVED</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge" style="background:var(--text-muted);color:var(--bg)">CMD</span>
+                <div class="content">
+                  <strong>start_ingestion(diagram_file)</strong><span>RECEIVED &rarr; PROCESSING</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge" style="background:var(--text-muted);color:var(--bg)">CMD</span>
+                <div class="content">
+                  <strong>complete_extraction(result)</strong><span>Registra ExtractionResult</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge" style="background:var(--text-muted);color:var(--bg)">CMD</span>
+                <div class="content">
+                  <strong>complete(qa_score)</strong><span>PROCESSING &rarr; ANALYZED</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge" style="background:var(--text-muted);color:var(--bg)">CMD</span>
+                <div class="content">
+                  <strong>fail(step, error_message)</strong><span>Qualquer &rarr; ERROR</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+      <!-- REPORT AGGREGATE -->
+      <div class="aggregate-box" style="border-color: var(--orange);">
+        <div class="agg-header" style="background: var(--orange-bg);">
+          <div class="icon" style="background: var(--orange); color: var(--bg);">R</div>
+          <div class="info">
+            <h3>ReportAggregate</h3>
+            <p>Bounded Context: Report Generation</p>
+          </div>
+        </div>
+        <div class="agg-body">
+
+          <div class="agg-section">
+            <h4>Raiz de Agregado</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge badge-root">ROOT</span>
+                <div class="content">
+                  <strong>ReportAggregate</strong>
+                  <span>Controla geracao e validacao de qualidade. Campos: id, analysis_id, report, qa_score</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="agg-section">
+            <h4>Entidades</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge badge-entity">ENTITY</span>
+                <div class="content">
+                  <strong>TechnicalReport</strong>
+                  <span>Relatorio gerado. Campos: components_identified[], architectural_risks[], recommendations[], executive_summary, rag_used</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="agg-section">
+            <h4>Value Objects</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge badge-vo">VO</span>
+                <div class="content">
+                  <strong>RiskItem</strong>
+                  <span>Risco com: category, description, severity, affected_components[], mitigation</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge badge-vo">VO</span>
+                <div class="content">
+                  <strong>Recommendation</strong>
+                  <span>Recomendacao arquitetural, com flag rag_influenced</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge badge-vo">VO</span>
+                <div class="content">
+                  <strong>QAScore</strong>
+                  <span>Score de qualidade: is_valid, completeness_score (&ge;0.6), issues_found[], quality_notes</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge badge-vo">VO</span>
+                <div class="content">
+                  <strong>RagContext</strong>
+                  <span>Contexto RAG: has_context, enrichment_text, similar_analyses_count</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="agg-section">
+            <h4>Enumeracoes</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge badge-enum">ENUM</span>
+                <div class="content">
+                  <strong>RiskCategory</strong>
+                  <span>SPOF | Seguranca | Escalabilidade | Acoplamento | Observabilidade | Resiliencia</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge badge-enum">ENUM</span>
+                <div class="content">
+                  <strong>Severity</strong>
+                  <span>ALTO | MEDIO | BAIXO</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="agg-section">
+            <h4>Domain Services</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge badge-svc">SVC</span>
+                <div class="content">
+                  <strong>GuardrailService</strong>
+                  <span>Valida grounding (anti-alucinacao &le;20%), completude de componentes, recomendacoes nao-vazias, sumario &ge;100 chars</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+
+          <div class="agg-section">
+            <h4>Operacoes</h4>
+            <ul class="entity-list">
+              <li>
+                <span class="badge" style="background:var(--text-muted);color:var(--bg)">CMD</span>
+                <div class="content">
+                  <strong>create(report_id, analysis_id)</strong><span>Factory: cria ReportAggregate vazio</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge" style="background:var(--text-muted);color:var(--bg)">CMD</span>
+                <div class="content">
+                  <strong>attach_report(technical_report)</strong><span>Vincula TechnicalReport e emite ReportGeneratedEvent</span>
+                </div>
+              </li>
+              <li>
+                <span class="badge" style="background:var(--text-muted);color:var(--bg)">CMD</span>
+                <div class="content">
+                  <strong>attach_qa(qa_score)</strong><span>Vincula QAScore e emite QAValidationCompletedEvent</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- SHARED KERNEL -->
+    <div class="shared-kernel">
+      <h3>Shared Kernel</h3>
+      <div class="sk-items">
+        <div class="sk-item">
+          <span class="badge badge-id" style="margin-bottom:4px">ID</span>
+          <strong>AnalysisId</strong>
+          <span>UUID - identifica uma analise</span>
+        </div>
+        <div class="sk-item">
+          <span class="badge badge-id" style="margin-bottom:4px">ID</span>
+          <strong>ReportId</strong>
+          <span>UUID - identifica um relatorio</span>
+        </div>
+        <div class="sk-item">
+          <span class="badge badge-event" style="margin-bottom:4px">BASE</span>
+          <strong>DomainEvent</strong>
+          <span>Classe base com occurred_at (UTC) e event_name</span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<!--  TAB 3: DOMAIN EVENTS                          -->
+<!-- ═══════════════════════════════════════════════ -->
+<div id="tab-events" class="tab-content">
+  <div class="diagram-container">
+    <div class="events-flow">
+
+      <div class="event-row">
+        <div class="event-dot dot-blue"></div>
+        <div class="event-card">
+          <div class="ev-name">DiagramReceivedEvent</div>
+          <div class="ev-ctx">Analysis BC &mdash; emitido por AnalysisAggregate.create()</div>
+          <div class="ev-desc">Payload: analysis_id, file_name, source (upload|sqs)</div>
+        </div>
+      </div>
+      <div class="event-line"></div>
+
+      <div class="event-row">
+        <div class="event-dot dot-blue"></div>
+        <div class="event-card">
+          <div class="ev-name">DiagramIngestedEvent</div>
+          <div class="ev-ctx">Analysis BC &mdash; emitido por start_ingestion()</div>
+          <div class="ev-desc">Payload: analysis_id, file_type, file_size_kb</div>
+        </div>
+      </div>
+      <div class="event-line"></div>
+
+      <div class="event-row">
+        <div class="event-dot dot-purple"></div>
+        <div class="event-card">
+          <div class="ev-name">ComponentsExtractedEvent</div>
+          <div class="ev-ctx">Analysis BC &mdash; emitido por complete_extraction()</div>
+          <div class="ev-desc">Payload: analysis_id, components_count, patterns_count</div>
+        </div>
+      </div>
+      <div class="event-line"></div>
+
+      <div class="event-row">
+        <div class="event-dot dot-orange"></div>
+        <div class="event-card">
+          <div class="ev-name">ReportGeneratedEvent</div>
+          <div class="ev-ctx">Report BC &mdash; emitido por attach_report()</div>
+          <div class="ev-desc">Payload: report_id, analysis_id, rag_used, risks_count</div>
+        </div>
+      </div>
+      <div class="event-line"></div>
+
+      <div class="event-row">
+        <div class="event-dot dot-orange"></div>
+        <div class="event-card">
+          <div class="ev-name">QAValidationCompletedEvent</div>
+          <div class="ev-ctx">Report BC &mdash; emitido por attach_qa()</div>
+          <div class="ev-desc">Payload: report_id, analysis_id, is_valid, completeness_score</div>
+        </div>
+      </div>
+      <div class="event-line"></div>
+
+      <div class="event-row">
+        <div class="event-dot dot-green"></div>
+        <div class="event-card">
+          <div class="ev-name">AnalysisCompletedEvent</div>
+          <div class="ev-ctx">Analysis BC &mdash; emitido por complete()</div>
+          <div class="ev-desc">Payload: analysis_id, qa_score</div>
+        </div>
+      </div>
+      <div class="event-line" style="border-left:2px dashed var(--red);background:transparent;margin-left:28px"></div>
+
+      <div class="event-row">
+        <div class="event-dot dot-red"></div>
+        <div class="event-card" style="border-color:var(--red)">
+          <div class="ev-name" style="color:var(--red)">AnalysisFailedEvent</div>
+          <div class="ev-ctx">Analysis BC &mdash; emitido por fail()</div>
+          <div class="ev-desc">Payload: analysis_id, step, error_message (pode ocorrer em qualquer ponto)</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════ -->
+<!--  TAB 4: INFRAESTRUTURA                         -->
+<!-- ═══════════════════════════════════════════════ -->
+<div id="tab-infra" class="tab-content">
+  <div class="diagram-container">
+    <div class="infra-grid">
+
+      <div class="infra-card">
+        <h3>ia-service <span class="port">:8000</span></h3>
+        <div class="card-desc">Servico principal de analise IA (FastAPI). Consome SQS, executa pipeline de extracao, risco e geracao de relatorio.</div>
+        <ul class="dep-list">
+          <li>PostgreSQL + pgvector</li>
+          <li>OpenAI API (GPT-4o Vision)</li>
+          <li>AWS SQS / S3</li>
+          <li>HuggingFace (fine-tuning opcional)</li>
+          <li>LangChain (JsonOutputParser)</li>
+        </ul>
+      </div>
+
+      <div class="infra-card">
+        <h3>report-api <span class="port">:8001</span></h3>
+        <div class="card-desc">API de consulta de relatorios gerados. Leitura do banco PostgreSQL.</div>
+        <ul class="dep-list">
+          <li>PostgreSQL (leitura)</li>
+        </ul>
+      </div>
+
+      <div class="infra-card">
+        <h3>streamlit-app <span class="port">:8501</span></h3>
+        <div class="card-desc">Interface web para upload de diagramas e visualizacao de resultados.</div>
+        <ul class="dep-list">
+          <li>ia-service (HTTP)</li>
+          <li>report-api (HTTP)</li>
+        </ul>
+      </div>
+
+      <div class="infra-card">
+        <h3>PostgreSQL + pgvector <span class="port">:5432</span></h3>
+        <div class="card-desc">Banco relacional com extensao vetorial. Armazena analyses, extraction_results, reports e embeddings.</div>
+        <ul class="dep-list">
+          <li>pgvector/pgvector:pg16</li>
+          <li>Volume: pgvector_data</li>
+          <li>Healthcheck: pg_isready</li>
+          <li>Indice HNSW para busca vetorial</li>
+        </ul>
+      </div>
+
+      <div class="infra-card">
+        <h3>AWS SQS</h3>
+        <div class="card-desc">Fila de mensagens para integracao assincrona com sistema SOAT externo.</div>
+        <ul class="dep-list">
+          <li>Long polling</li>
+          <li>Max 5 mensagens/batch</li>
+          <li>Idempotencia por message_id</li>
+        </ul>
+      </div>
+
+      <div class="infra-card">
+        <h3>AWS S3</h3>
+        <div class="card-desc">Armazenamento de diagramas referenciados nas mensagens SQS.</div>
+        <ul class="dep-list">
+          <li>Download com retry 3x</li>
+          <li>Suporta: PNG, JPEG, GIF, WEBP, PDF</li>
+          <li>Limite: 20MB por arquivo</li>
+        </ul>
+      </div>
+
+    </div>
+
+    <!-- Docker topology -->
+    <div style="margin-top:32px; text-align:center;">
+      <div style="display:inline-block;background:var(--surface);border:2px solid var(--border);border-radius:12px;padding:24px 32px;">
+        <div style="font-size:13px;color:var(--text-muted);margin-bottom:12px;text-transform:uppercase;letter-spacing:1px;font-weight:600;">Docker Compose Topology</div>
+        <div style="display:flex;gap:16px;align-items:center;justify-content:center;flex-wrap:wrap;">
+          <div style="padding:10px 20px;border-radius:8px;background:var(--purple-bg);border:1px solid var(--purple);font-size:13px;">
+            <strong style="color:var(--purple)">ia-service</strong><br><span style="color:var(--text-muted)">:8000</span>
+          </div>
+          <div style="color:var(--text-muted)">&harr;</div>
+          <div style="padding:10px 20px;border-radius:8px;background:var(--cyan-bg);border:1px solid var(--cyan);font-size:13px;">
+            <strong style="color:var(--cyan)">pgvector</strong><br><span style="color:var(--text-muted)">:5432</span>
+          </div>
+          <div style="color:var(--text-muted)">&harr;</div>
+          <div style="padding:10px 20px;border-radius:8px;background:var(--orange-bg);border:1px solid var(--orange);font-size:13px;">
+            <strong style="color:var(--orange)">report-api</strong><br><span style="color:var(--text-muted)">:8001</span>
+          </div>
+          <div style="color:var(--text-muted)">&larr;</div>
+          <div style="padding:10px 20px;border-radius:8px;background:var(--green-bg);border:1px solid var(--green);font-size:13px;">
+            <strong style="color:var(--green)">streamlit</strong><br><span style="color:var(--text-muted)">:8501</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+function switchTab(name) {
+  document.querySelectorAll('.tab-content').forEach(el => el.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+  event.target.classList.add('active');
+}
+</script>
+
+</body>
+</html>

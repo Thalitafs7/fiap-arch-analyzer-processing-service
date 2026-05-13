@@ -1,0 +1,27 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: arch-analyzer-ia
+
+resources:
+  - deployment.yaml
+  - celery-worker-deployment.yaml
+  - service.yaml
+  - ingress.yaml
+  - hpa.yaml
+  - configmap.yaml
+  - aws-secret-template.yaml
+
+commonLabels:
+  app.kubernetes.io/part-of: arch-analyzer
+
+images:
+  # Both processing-service and celery-worker use the same image.
+  # The orchestrator substitutes ECR_REGISTRY and IMAGE_TAG at deploy time:
+  #   kubectl kustomize k8s/ | \
+  #     sed "s|\${ECR_REGISTRY}|<account>.dkr.ecr.us-east-1.amazonaws.com|g" | \
+  #     sed "s|\${IMAGE_TAG}|<git-sha>|g" | kubectl apply -f -
+  # Or via kustomize edit set image before apply.
+  - name: arch-analyzer-processing
+    newName: ${ECR_REGISTRY}/arch-analyzer-processing
+    newTag: ${IMAGE_TAG}

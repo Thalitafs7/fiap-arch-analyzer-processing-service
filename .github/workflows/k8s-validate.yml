@@ -1,0 +1,51 @@
+name: k8s-validate
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "k8s/**"
+
+jobs:
+  kubeconform:
+    name: Validate Kubernetes manifests
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -sSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+          kubeconform -v
+
+      - name: Run kubeconform
+        run: |
+          find k8s/ -name '*.yaml' -not -name 'aws-secret-template.yaml' \
+            | xargs kubeconform \
+                -summary \
+                -strict \
+                -kubernetes-version 1.29.0
+
+  no-aws-literals:
+    name: Guardrail — no hardcoded AWS literals
+    runs-on: ubuntu-latest
+    needs: kubeconform
+
+    steps:
+      - name: Checkout service repo
+        uses: actions/checkout@v4
+
+      - name: Checkout infra repo (composite actions)
+        uses: actions/checkout@v4
+        with:
+          repository: fiap-arch-analyzer/fiap-arch-analyzer-infra
+          path: .infra-actions
+
+      - name: Run no-aws-literals guardrail
+        uses: ./.infra-actions/.github/actions/no-aws-literals
+        with:
+          k8s_dir: k8s

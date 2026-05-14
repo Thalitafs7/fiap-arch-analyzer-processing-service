@@ -42,6 +42,7 @@ python-multipart==0.0.20
 openai==1.59.3
 langchain-huggingface==0.1.2
 sentence-transformers==3.3.1
+# torch é instalado separadamente no Dockerfile (CPU-only) para evitar 2GB de CUDA
 
 # Celery + Redis
 celery[redis]==5.4.0

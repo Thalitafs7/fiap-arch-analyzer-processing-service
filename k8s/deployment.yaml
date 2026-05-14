@@ -1,0 +1,134 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: processing-service
+  namespace: arch-analyzer-ia
+  labels:
+    app.kubernetes.io/name: processing-service
+    app.kubernetes.io/part-of: arch-analyzer
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  selector:
+    matchLabels:
+      app: processing-service
+  template:
+    metadata:
+      labels:
+        app: processing-service
+        app.kubernetes.io/name: processing-service
+        app.kubernetes.io/part-of: arch-analyzer
+        app.kubernetes.io/component: api
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10000
+        fsGroup: 10000
+
+      volumes:
+        - name: secrets-vol
+          emptyDir:
+            medium: Memory
+
+      initContainers:
+        - name: secrets-sync
+          image: amazon/aws-cli:2.15.0
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              # Fetch DB credentials for processing service
+              DB_SECRET=$(aws secretsmanager get-secret-value \
+                --secret-id arch-analyzer/db/processing \
+                --query SecretString \
+                --output text)
+              echo "$DB_SECRET" > /secrets/db.json
+
+              # Fetch Redis password
+              REDIS_SECRET=$(aws secretsmanager get-secret-value \
+                --secret-id arch-analyzer/redis/password \
+                --query SecretString \
+                --output text)
+              echo "$REDIS_SECRET" > /secrets/redis.json
+
+              # Fetch LLM API keys (OpenAI, Anthropic, etc.)
+              LLM_SECRET=$(aws secretsmanager get-secret-value \
+                --secret-id arch-analyzer/llm/keys \
+                --query SecretString \
+                --output text)
+              echo "$LLM_SECRET" > /secrets/llm.json
+          volumeMounts:
+            - name: secrets-vol
+              mountPath: /secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+      containers:
+        - name: processing-service
+          image: arch-analyzer-processing:latest
+          # Image resolved at deploy time via kustomization.yaml images override:
+          #   newName: ${ECR_REGISTRY}/arch-analyzer-processing
+          #   newTag:  ${IMAGE_TAG}
+          ports:
+            - containerPort: 8000
+
+          envFrom:
+            - configMapRef:
+                name: infra-outputs # AWS_REGION, DB_ADDRESS, SQS_PROCESSING_QUEUE_URL, S3_DIAGRAMS_BUCKET, ECR_*, etc.
+            - configMapRef:
+                name: processing-config # LLM model IDs, Celery queue names, non-sensitive app config
+            - secretRef:
+                name: processing-secret # POSTGRES_CONNECTION_STRING, REDIS_URL, OPENAI_API_KEY, ANTHROPIC_API_KEY
+
+          # Cherry-pick specific keys from infra-outputs that the FastAPI app expects
+          # under canonical env var names (Mode B consumption per contract)
+          env:
+            - name: SQS_QUEUE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: infra-outputs
+                  key: SQS_PROCESSING_QUEUE_URL
+            - name: S3_BUCKET_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: infra-outputs
+                  key: S3_DIAGRAMS_BUCKET
+
+          volumeMounts:
+            - name: secrets-vol
+              mountPath: /secrets
+              readOnly: true
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 5
+            periodSeconds: 5

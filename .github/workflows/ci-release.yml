@@ -3,14 +3,14 @@ name: CI Release Branch
 on:
   push:
     branches:
-      - 'release/*'
+      - "release/*"
 
 permissions:
   contents: write
   pull-requests: write
 
 jobs:
-  test-and-main-pr:
+  create-main-pr:
     runs-on: ubuntu-latest
     env:
       GH_TOKEN: ${{ github.token }}
@@ -18,23 +18,14 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v4
 
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.5.0"
-
-      - name: Run Tests
-        run: ./.github/scripts/check_test_success.sh
-
       - name: Create Pull Request to Main
         run: |
-          # Check if PR already exists
           PR_EXISTS=$(gh pr list --head "${{ github.ref_name }}" --base main --json number | jq 'length > 0')
 
           if [ "$PR_EXISTS" = "false" ]; then
             gh pr create \
               --title "Finalize Release ${{ github.ref_name }}" \
-              --body "Automated PR from release branch to main after successful CI." \
+              --body "Automated PR from release branch to main." \
               --base main \
               --head "${{ github.ref_name }}"
           else

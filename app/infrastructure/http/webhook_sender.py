@@ -82,20 +82,23 @@ def send_webhook(
     report: dict | None = None,
     error_message: str | None = None,
     soat_analysis_id: str = "",
+    error_step: str | None = None,
+    error_type: str | None = None,
 ) -> bool:
     """
     Envia o resultado da análise para callback_url via POST.
 
     Sempre retorna True/False — nunca lança exceção.
-    Falha no webhook NÃO impede o delete da mensagem SQS.
 
     Args:
-        callback_url:      URL de destino (vem da mensagem SQS). Se None/vazio, no-op.
+        callback_url:      URL de destino. Se None/vazio, no-op.
         analysis_id:       ID interno da análise processada.
         status:            "analisado" | "erro"
         report:            Relatório completo (quando status = "analisado").
-        error_message:     Mensagem de erro (quando status = "erro").
-        soat_analysis_id:  ID da análise no sistema SOAT (devolvido no payload).
+        error_message:     Mensagem de erro legível (quando status = "erro").
+        soat_analysis_id:  ID da análise no sistema SOAT.
+        error_step:        Etapa do pipeline onde ocorreu o erro.
+        error_type:        Classe da exceção que causou o erro.
 
     Returns:
         True se o webhook foi entregue com sucesso, False caso contrário.
@@ -110,6 +113,8 @@ def send_webhook(
         "status": status,
         "report": report,
         "error_message": error_message,
+        "error_step": error_step,
+        "error_type": error_type,
         "completed_at": datetime.now(timezone.utc).isoformat(),
     }
 

@@ -18,6 +18,7 @@ Fluxo de dependências:
 from typing import Callable, Optional
 from sqlalchemy.orm import Session
 
+from app.domain.shared.analysis_id import AnalysisId
 from app.infrastructure.composition_root import build_analyze_use_case
 
 # Tipo do callback: (step_name, status, data_dict) -> None
@@ -30,6 +31,8 @@ def run_pipeline(
     file_name: str,
     s3_key: Optional[str] = None,
     sqs_message_id: Optional[str] = None,
+    external_analysis_id: Optional[str] = None,
+    analysis_id: Optional[AnalysisId] = None,
     on_step: Optional[StepCallback] = None,
 ) -> dict:
     """
@@ -38,12 +41,14 @@ def run_pipeline(
     Delega ao AnalyzeDiagramUseCase (DDD Application Layer).
 
     Args:
-        db:              sessão SQLAlchemy (injetada pelo FastAPI / SQS consumer)
-        file_bytes:      conteúdo binário do arquivo
-        file_name:       nome original do arquivo
-        s3_key:          chave S3 (opcional, fluxo SQS)
-        sqs_message_id:  ID da mensagem SQS (idempotência)
-        on_step:         callback de progresso para streaming SSE
+        db:                  sessão SQLAlchemy (injetada pelo FastAPI / SQS consumer)
+        file_bytes:          conteúdo binário do arquivo
+        file_name:           nome original do arquivo
+        s3_key:              chave S3 (opcional, fluxo SQS)
+        sqs_message_id:      ID da mensagem SQS (idempotência)
+        external_analysis_id: ID da análise no sistema externo (SOAT)
+        analysis_id:         ID pré-gerado a ser usado pelo pipeline (opcional)
+        on_step:             callback de progresso para streaming SSE
 
     Returns:
         dict com analysis_id, status, report e qa
@@ -56,6 +61,8 @@ def run_pipeline(
         file_name=file_name,
         s3_key=s3_key,
         sqs_message_id=sqs_message_id,
+        external_analysis_id=external_analysis_id,
+        analysis_id=analysis_id,
         source=source,
         on_step=on_step,
     )

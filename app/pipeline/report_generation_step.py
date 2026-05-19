@@ -83,7 +83,7 @@ def _run_with_langchain(
 
     llm_kwargs = {
         "model": settings.llm_model,
-        "max_tokens": 8192,
+        "max_tokens": 4096,
         "openai_api_key": settings.openai_api_key,
         "max_retries": 6,
     }

@@ -62,18 +62,23 @@ def _put_with_retry(url: str, payload: dict) -> bool:
     return True
 
 
-def update_analysis_status(soat_analysis_id: str, status: str) -> bool:
+def update_analysis_status(
+    soat_analysis_id: str,
+    status: str,
+    processing_analysis_id: str | None = None,
+) -> bool:
     """
     Notifica o SOAT sobre a mudança de status de uma análise.
 
     PUT {SOAT_BASE_URL}/analyses/{soat_analysis_id}/status
-    Body: {"status": status}
+    Body: {"status": status, "soat_analysis_id": processing_analysis_id}
 
     Sempre retorna True/False — nunca lança exceção.
 
     Args:
-        soat_analysis_id: ID da análise no sistema SOAT.
-        status:           Novo status (ex: "em_processamento", "analisado", "erro").
+        soat_analysis_id:       ID da análise no sistema SOAT.
+        status:                 Novo status (ex: "em_processamento", "analisado", "erro").
+        processing_analysis_id: ID da análise gerada no processing-service (devolvida ao SOAT).
 
     Returns:
         True se a atualização foi aceita, False caso contrário.
@@ -91,9 +96,13 @@ def update_analysis_status(soat_analysis_id: str, status: str) -> bool:
     url = f"{settings.soat_base_url.rstrip('/')}/analyses/{soat_analysis_id}/status"
     log = logger.bind(soat_analysis_id=soat_analysis_id, status=status)
 
+    payload: dict = {"status": status}
+    if processing_analysis_id:
+        payload["soat_analysis_id"] = processing_analysis_id
+
     try:
-        log.info("soat.status_update.sending")
-        success = _put_with_retry(url, {"status": status})
+        log.info("soat.status_update.sending", processing_analysis_id=processing_analysis_id)
+        success = _put_with_retry(url, payload)
         if success:
             log.info("soat.status_update.sent")
         return success

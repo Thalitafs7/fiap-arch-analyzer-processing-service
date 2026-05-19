@@ -39,6 +39,7 @@ from tenacity import (
     wait_exponential,
 )
 
+from app.domain.shared.analysis_id import AnalysisId
 from app.infrastructure.config.settings import get_settings
 from app.infrastructure.persistence.database import get_session_factory
 from app.infrastructure.persistence.sqlalchemy_analysis_repository import SQLAlchemyAnalysisRepository
@@ -138,9 +139,16 @@ def _process(body: bytes, redelivered: bool) -> None:
             bytes=len(file_bytes),
         )
 
-        # ── Notifica SOAT: início do processamento ────────────────────
+        # ── Pré-gera o analysis_id do processing para devolver ao SOAT ──
+        processing_analysis_id = AnalysisId.generate()
+
+        # ── Notifica SOAT: início do processamento + ID gerado ────────
         if soat_analysis_id:
-            update_analysis_status(soat_analysis_id, "em_processamento")
+            update_analysis_status(
+                soat_analysis_id,
+                "em_processamento",
+                processing_analysis_id=str(processing_analysis_id),
+            )
 
         def on_step(step: str, status: str, data: dict) -> None:
             event = {"step": step, "status": status, "data": data}
@@ -154,6 +162,8 @@ def _process(body: bytes, redelivered: bool) -> None:
             file_bytes=file_bytes,
             file_name=file_name,
             sqs_message_id=job_id,
+            external_analysis_id=soat_analysis_id or None,
+            analysis_id=processing_analysis_id,
             on_step=on_step,
         )
 

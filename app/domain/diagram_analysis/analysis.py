@@ -6,6 +6,7 @@ de uma análise de diagrama, garantindo consistência de estado.
 
 from __future__ import annotations
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import List, Optional
 
 from app.domain.shared.analysis_id import AnalysisId
@@ -36,9 +37,11 @@ class AnalysisAggregate:
     file_type: str
     s3_key: Optional[str] = None
     sqs_message_id: Optional[str] = None
+    external_analysis_id: Optional[str] = None
     diagram_file: Optional[DiagramFile] = None
     extraction_result: Optional[ExtractionResult] = None
     error_message: Optional[str] = None
+    created_at: Optional[datetime] = None
     _events: List[DomainEvent] = field(default_factory=list, repr=False)
 
     @classmethod
@@ -49,6 +52,7 @@ class AnalysisAggregate:
         file_type: str,
         s3_key: Optional[str] = None,
         sqs_message_id: Optional[str] = None,
+        external_analysis_id: Optional[str] = None,
         source: str = "upload",
     ) -> "AnalysisAggregate":
         """Factory — cria uma nova análise no estado RECEIVED."""
@@ -59,6 +63,7 @@ class AnalysisAggregate:
             file_type=file_type,
             s3_key=s3_key,
             sqs_message_id=sqs_message_id,
+            external_analysis_id=external_analysis_id,
         )
         aggregate._events.append(
             DiagramReceivedEvent(

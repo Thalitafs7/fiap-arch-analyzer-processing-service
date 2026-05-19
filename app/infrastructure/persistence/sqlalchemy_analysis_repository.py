@@ -40,8 +40,8 @@ class SQLAlchemyAnalysisRepository(IAnalysisRepository):
     def _insert(self, analysis: AnalysisAggregate) -> None:
         self._db.execute(
             text("""
-                INSERT INTO analyses (id, status, file_name, file_type, s3_key, sqs_message_id)
-                VALUES (:id, :status, :file_name, :file_type, :s3_key, :sqs_message_id)
+                INSERT INTO analyses (id, status, file_name, file_type, s3_key, sqs_message_id, external_analysis_id)
+                VALUES (:id, :status, :file_name, :file_type, :s3_key, :sqs_message_id, :external_analysis_id)
             """),
             {
                 "id": str(analysis.id),
@@ -50,6 +50,7 @@ class SQLAlchemyAnalysisRepository(IAnalysisRepository):
                 "file_type": analysis.file_type,
                 "s3_key": analysis.s3_key,
                 "sqs_message_id": analysis.sqs_message_id,
+                "external_analysis_id": analysis.external_analysis_id,
             },
         )
         self._db.commit()
@@ -136,6 +137,21 @@ class SQLAlchemyAnalysisRepository(IAnalysisRepository):
 
         return self._row_to_aggregate(dict(row))
 
+    def get_by_external_analysis_id(self, external_analysis_id: str) -> Optional[AnalysisAggregate]:
+        row = self._db.execute(
+            text("SELECT * FROM analyses WHERE external_analysis_id = :eid LIMIT 1"),
+            {"eid": external_analysis_id},
+        ).mappings().first()
+        if not row:
+            return None
+        return self._row_to_aggregate(dict(row))
+
+    def get_all(self) -> list[AnalysisAggregate]:
+        rows = self._db.execute(
+            text("SELECT * FROM analyses ORDER BY created_at DESC")
+        ).mappings().all()
+        return [self._row_to_aggregate(dict(row)) for row in rows]
+
     def get_by_sqs_message_id(self, sqs_message_id: str) -> Optional[AnalysisAggregate]:
         row = self._db.execute(
             text("SELECT * FROM analyses WHERE sqs_message_id = :msg_id LIMIT 1"),
@@ -155,5 +171,7 @@ class SQLAlchemyAnalysisRepository(IAnalysisRepository):
             file_type=row["file_type"],
             s3_key=row.get("s3_key"),
             sqs_message_id=row.get("sqs_message_id"),
+            external_analysis_id=row.get("external_analysis_id"),
             error_message=row.get("error_message"),
+            created_at=row.get("created_at"),
         )

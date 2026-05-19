@@ -190,6 +190,43 @@ async def analyze_diagram_stream(
     )
 
 
+@app.get("/analyses/by-external-id/{external_analysis_id}")
+def get_by_external_id(external_analysis_id: str, db: Session = Depends(get_db)):
+    """Consulta uma análise pelo ID externo (soat_analysis_id)."""
+    from app.infrastructure.persistence.sqlalchemy_analysis_repository import SQLAlchemyAnalysisRepository
+    repo = SQLAlchemyAnalysisRepository(db)
+    analysis = repo.get_by_external_analysis_id(external_analysis_id)
+    if not analysis:
+        raise HTTPException(status_code=404, detail="Análise não encontrada.")
+    return {
+        "analysis_id": str(analysis.id),
+        "status": analysis.status.value,
+        "file_name": analysis.file_name,
+        "external_analysis_id": analysis.external_analysis_id,
+        "error_message": analysis.error_message,
+        "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
+    }
+
+
+@app.get("/analyses")
+def get_all_analyses(db: Session = Depends(get_db)):
+    """Retorna todas as análises registradas."""
+    from app.infrastructure.persistence.sqlalchemy_analysis_repository import SQLAlchemyAnalysisRepository
+    repo = SQLAlchemyAnalysisRepository(db)
+    analyses = repo.get_all()
+    return [
+        {
+            "analysis_id": str(a.id),
+            "status": a.status.value,
+            "file_name": a.file_name,
+            "external_analysis_id": a.external_analysis_id,
+            "error_message": a.error_message,
+            "created_at": a.created_at.isoformat() if a.created_at else None,
+        }
+        for a in analyses
+    ]
+
+
 @app.get("/analyses/{analysis_id}/status")
 def get_status(analysis_id: str, db: Session = Depends(get_db)):
     """Consulta o status de processamento de uma análise."""
@@ -203,7 +240,9 @@ def get_status(analysis_id: str, db: Session = Depends(get_db)):
         "analysis_id": analysis_id,
         "status": analysis.status.value,
         "file_name": analysis.file_name,
+        "external_analysis_id": analysis.external_analysis_id,
         "error_message": analysis.error_message,
+        "created_at": analysis.created_at.isoformat() if analysis.created_at else None,
     }
 
 

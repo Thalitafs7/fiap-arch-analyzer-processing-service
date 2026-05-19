@@ -83,6 +83,8 @@ class AnalyzeDiagramUseCase:
         file_name: str,
         s3_key: Optional[str] = None,
         sqs_message_id: Optional[str] = None,
+        external_analysis_id: Optional[str] = None,
+        analysis_id: Optional[AnalysisId] = None,
         source: str = "upload",
         on_step: Optional[StepCallback] = None,
     ) -> dict:
@@ -97,13 +99,14 @@ class AnalyzeDiagramUseCase:
                 on_step(step, status, data or {})
 
         # ── Cria o aggregate de análise ────────────────────────────
-        analysis_id = AnalysisId.generate()
+        analysis_id = analysis_id or AnalysisId.generate()
         analysis = AnalysisAggregate.create(
             analysis_id=analysis_id,
             file_name=file_name,
             file_type=file_name.rsplit(".", 1)[-1].lower(),
             s3_key=s3_key,
             sqs_message_id=sqs_message_id,
+            external_analysis_id=external_analysis_id,
             source=source,
         )
         self._analysis_repo.save(analysis)
